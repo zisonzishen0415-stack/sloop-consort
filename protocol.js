@@ -7,6 +7,12 @@
     BK_LIST: 34, BK_GET: 35, BK_PUT: 36, LIVE: 77 };
   const SMP = { RATE: 22050, DATA_OFF: 512, HDR_LEN: 32 + 16 * 28, MAX_DATA: 0x14000 - 512, MAX_ZONES: 16 };
   const THEME_ID = 11;
+  /* A song as one file (SLOOP 2.7, the editor's "Export this song"): the loop, sections A-D and the
+     song order. Consort may add a top-level `samples` array (ids 32..35) when the user asks for it;
+     the upstream editor ignores unknown top-level fields, so the file still loads there. Those ids
+     must never go into `objects`: upstream rejects any object id other than 0 and 2..5. */
+  const SONGF = { FORMAT: "sloop-song", VERSION: 1, SECS: [2, 3, 4, 5], SAMPLES: [32, 33, 34, 35],
+    ORDER_OFF: 48, ORDER_LEN: 36, PER3: 0x50455233 };
 
   function frame(cmd, args) {
     args = args || [];
@@ -125,6 +131,31 @@
     const r = new Reader(a);
     return { scope: r.b(), id: r.b(), value: (r.b() | (r.b() << 7)) - 8192 };
   }
+  /* INFO: version string, NENGINES, P_COUNT, G_COUNT, NSTEP, P_E0, the engine names, then (v3) NTRK
+     and (v5) the protocol version. P_COUNT is all a song/backup check needs (see bkDevFormat). */
+  function parseInfo(a) {
+    const r = new Reader(a);
+    const o = { version: r.s(), nengines: r.b(), pcount: r.b(), gcount: r.b(), nstep: r.b(), pe0: r.b(), protocol: 0 };
+    for (let i = 0; i < o.nengines && r.i < a.length; i++) r.s();
+    if (r.i < a.length) r.b();                       /* NTRK */
+    if (r.i < a.length) o.protocol = r.b();
+    return o;
+  }
+  async function info(link) {
+    return parseInfo(await link.request(CMD.INFO, [], { timeout: 1000, retries: 2 }));
+  }
+  /* a project object starts "FUN4" .. "FUN6" (low byte first); 0 when it is not a project */
+  const bkProjFormat = (d) => (d && d.length >= 4 && d[1] === 0x4E && d[2] === 0x55 && d[3] === 0x46 ? d[0] - 0x30 : 0);
+  /* the newest project format a device reads, from its INFO (SLOOP 2.6 has 71 parameters) */
+  const bkDevFormat = (nfo) => (nfo && nfo.pcount >= 71 ? 6 : nfo && nfo.pcount >= 61 ? 5 : 4);
+  /* "SLOOP 2.6" is at least 2.5.1, the firmware whose backups may predate the MIDI map object */
+  const bkFwAtLeast = (v, want) => {
+    const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(v || ""));
+    if (!m) return false;
+    const a = [+m[1], +m[2], +(m[3] || 0)];
+    for (let i = 0; i < 3; i++) if (a[i] !== want[i]) return a[i] > want[i];
+    return true;
+  };
 
   async function smpInfo(link) {
     const a = await link.request(CMD.SMP_INFO, [], { timeout: 2000, retries: 0 });
@@ -189,40 +220,77 @@
     return { format: "sloop-backup", version: 1, date: new Date().toISOString(), objects };
   }
   async function backupRestore(link, file, progress) {
+    const SAMPLES = [32, 33, 34, 35];
     const RESTORE = [6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 0, 1];
     const m = new Map();
     for (const o of file.objects || []) {
       const d = unb64(o.data || "");
+      if (![...RESTORE, ...SAMPLES].includes(o.id)) throw new Error("object " + o.id + " unknown");
       if (d.length !== o.len || crc32(d) !== (o.crc >>> 0)) throw new Error("object " + o.id + " damaged");
       m.set(o.id, d);
     }
     if (!m.has(0) || !m.has(1)) throw new Error("incomplete backup");
+    // Refuse a backup made by a newer firmware before anything is written (upstream does the same).
+    const nfo = await info(link);
+    const newest = Math.max(0, ...[0, 2, 3, 4, 5].filter((id) => m.has(id)).map((id) => bkProjFormat(m.get(id))));
+    if (newest > bkDevFormat(nfo)) throw new Error("backup format " + newest + " > device " + bkDevFormat(nfo));
+    // A pre-2.6 backup has no MIDI map; upstream restores it to the defaults instead of leaving today's.
+    if (!m.has(10) && bkFwAtLeast(file.firmware, [2, 5, 1])) {
+      const d = new Uint8Array(40);
+      d.set([1, 2, 3, 10, 2], 32);
+      m.set(10, d);
+    }
     let done = 0;
     const total = [...m.values()].reduce((s, d) => s + d.length, 0) || 1;
     for (const id of RESTORE) {
       if (!m.has(id)) continue;
-      await writeObject(link, id, m.get(id));
+      try {
+        await writeObject(link, id, m.get(id));
+      } catch (e) {
+        // A device before v9/v10/v11 has no object 8/9/10/11: its begin answers rc 5 (or rc 1). Skip it.
+        if ([8, 9, 10, 11].includes(id) && /begin rc [15]/.test(e.message)) continue;
+        throw e;
+      }
       done += m.get(id).length;
+      if (progress) progress(done, total);
+    }
+    // The samples are not backup objects: they go through SMP (header + packed ADPCM), as upstream.
+    for (const id of SAMPLES) {
+      if (!m.has(id)) continue;
+      const k = id - 32, d = m.get(id);
+      if (!d.length) { await smpErase(link, k); continue; }
+      // subarray clamps: a header-only object uploads no audio and keeps the header, as upstream does.
+      const data = d.subarray(SMP.DATA_OFF);
+      await smpUpload(link, k, d.subarray(0, SMP.HDR_LEN), data, (n) => {
+        if (progress) progress(done + n, total);
+      });
+      done += data.length;
       if (progress) progress(done, total);
     }
     return true;
   }
 
-  async function readObject(link, id) {
-    const L = parseList(await link.request(CMD.BK_LIST, [], { timeout: 5000, retries: 0 }));
-    if (L.rc) throw new Error("list rc " + L.rc);
-    const it = L.items.find((x) => x.id === id);
-    if (!it) return null;
+  /* one object, read whole from a BK_LIST item (the list already carries its length and CRC) */
+  async function readItem(link, it) {
     // BK_GET takes at most 256 bytes per reply; a sample slot can be 80 KiB (a theme is 40 bytes).
     const data = new Uint8Array(it.len);
     for (let off = 0; off < it.len; off += 256) {
       const n = Math.min(256, it.len - off);
       const g = parseGet(await link.request(CMD.BK_GET,
-        [id, ...u35enc(off), n & 0x7F, (n >> 7) & 0x7F], { timeout: 1500, retries: 2 }));
-      if (g.rc) throw new Error("get rc " + g.rc);
+        [it.id, ...u35enc(off), n & 0x7F, (n >> 7) & 0x7F], { timeout: 1500, retries: 2 }));
+      if (g.rc) throw new Error("get " + it.id + "+" + off + " rc " + g.rc);
+      if (g.data.length !== n) throw new Error("get " + it.id + "+" + off + ": " + g.data.length + " bytes");
       data.set(g.data, off);
     }
+    if (crc32(data) !== (it.crc >>> 0)) throw new Error("object " + it.id + " CRC");
     return data;
+  }
+  async function readObject(link, id) {
+    const L = parseList(await link.request(CMD.BK_LIST, [], { timeout: 5000, retries: 0 }));
+    if (L.rc) throw new Error("list rc " + L.rc);
+    const it = L.items.find((x) => x.id === id);
+    if (!it) return null;
+    return readItem(link, it);
   }
   async function writeObject(link, id, bytes) {
     bytes = Uint8Array.from(bytes);
@@ -236,6 +304,142 @@
     }
     r = parsePut(await link.request(CMD.BK_PUT, [2, id], { timeout: 5000, retries: 0 }));
     if (r.rc) throw new Error("commit rc " + r.rc);
+  }
+
+  /* ---- songs as one file (SLOOP 2.7): format "sloop-song" ----
+     {format, version, name, firmware, date, order: base64(36) | null,
+      objects: [{id, len, crc, data: base64}],
+      samples?: [{id, len, crc, data: base64}]}   ids: 0 the loop, 2..5 sections A-D; 32..35 USR1-4.
+     `samples` is a Consort extension and is absent from a canonical upstream export. Keeping it out of
+     `objects` is what lets the upstream editor load the file (it ignores unknown top-level keys). */
+  function songObjects(file) {
+    if (!file || file.format !== SONGF.FORMAT || !(file.version >= 1) || !Array.isArray(file.objects))
+      throw new Error("not a SLOOP song");
+    const m = new Map();
+    for (const o of file.objects) {
+      const d = unb64(o.data || "");
+      if (!(o.id === 0 || SONGF.SECS.includes(o.id))) throw new Error("object " + o.id + " unknown");
+      if (d.length !== o.len || crc32(d) !== (o.crc >>> 0)) throw new Error("object " + o.id + " damaged");
+      m.set(o.id, d);
+    }
+    if (!m.has(0)) throw new Error("no loop");
+    const order = file.order ? unb64(file.order) : null;
+    if (order && order.length !== SONGF.ORDER_LEN) throw new Error("bad song order");
+    let samples = null;
+    if (file.samples != null) {
+      if (!Array.isArray(file.samples)) throw new Error("samples: not a list");
+      samples = new Map();
+      for (const o of file.samples) {
+        const d = unb64(o && o.data || "");
+        if (!o || !SONGF.SAMPLES.includes(o.id)) throw new Error("sample " + (o && o.id) + " unknown");
+        if (samples.has(o.id)) throw new Error("sample " + o.id + " twice");
+        if (d.length !== o.len || crc32(d) !== (o.crc >>> 0)) throw new Error("sample " + o.id + " damaged");
+        samples.set(o.id, d);
+      }
+    }
+    return { objects: m, order, samples };
+  }
+  async function songCapture(link, name, progress, withSamples) {
+    const L = parseList(await link.request(CMD.BK_LIST, [], { timeout: 5000, retries: 0 }));
+    if (L.rc) throw new Error("list rc " + L.rc);
+    const items = L.items.filter((it) => it.id === 0 || it.id === 1
+      || (SONGF.SECS.includes(it.id) && it.len)
+      || (withSamples && SONGF.SAMPLES.includes(it.id)));
+    // A slot the firmware does not list is an empty slot; record it so loading the file clears it.
+    if (withSamples) for (const id of SONGF.SAMPLES) {
+      if (!items.some((it) => it.id === id)) items.push({ id, len: 0, crc: 0 });
+    }
+    const total = items.reduce((s, it) => s + it.len, 0) || 1, objects = [], samples = [];
+    let done = 0, order = null;
+    for (const it of items) {
+      const d = it.len ? await readItem(link, it) : new Uint8Array(0);
+      done += it.len;
+      if (progress) progress(done, total);
+      if (it.id === 1) {
+        // The song order lives in the settings object (arr_config_t); keep the 36 bytes, not the settings.
+        if (d.length >= SONGF.ORDER_OFF + SONGF.ORDER_LEN
+            && ((d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24)) >>> 0) === SONGF.PER3)
+          order = d.slice(SONGF.ORDER_OFF, SONGF.ORDER_OFF + SONGF.ORDER_LEN);
+        continue;
+      }
+      const o = { id: it.id, len: it.len, crc: it.crc, data: b64(d) };
+      if (SONGF.SAMPLES.includes(it.id)) samples.push(o);
+      else objects.push(o);
+    }
+    const nfo = await info(link);
+    const out = { format: SONGF.FORMAT, version: SONGF.VERSION, name: String(name || "").slice(0, 40),
+      firmware: nfo.version, date: new Date().toISOString(),
+      order: order ? b64(order) : null, objects };
+    if (withSamples) out.samples = samples;
+    return out;
+  }
+  async function songLoad(link, file, progress) {
+    const { objects: m, order, samples } = songObjects(file);
+    const nfo = await info(link);
+    const newest = Math.max(0, ...[...m.values()].map(bkProjFormat));
+    if (newest > bkDevFormat(nfo)) throw new Error("song format " + newest + " > device " + bkDevFormat(nfo));
+    const total = [...m.values()].reduce((s, d) => s + d.length, 0)
+      + (samples ? [...samples.values()].reduce((s, d) => s + d.length, 0) : 0) || 1;
+    let done = 0;
+    const step = (n) => { done += n; if (progress) progress(done, total); };
+    // The four sections first (an absent one clears that slot), then the loop, as the editor does.
+    for (const id of SONGF.SECS) {
+      const d = m.get(id) || new Uint8Array(0);
+      await writeObject(link, id, d);
+      step(d.length);
+    }
+    await writeObject(link, 0, m.get(0));
+    step(m.get(0).length);
+    if (order) {
+      // Splice the song order into the device's own settings object, so its colours and calibration stay.
+      const L = parseList(await link.request(CMD.BK_LIST, [], { timeout: 5000, retries: 0 }));
+      const it = L.rc ? null : L.items.find((x) => x.id === 1);
+      if (!it) throw new Error("settings unavailable");
+      const s = await readItem(link, it);
+      if (s.length >= SONGF.ORDER_OFF + SONGF.ORDER_LEN
+          && ((s[0] | (s[1] << 8) | (s[2] << 16) | (s[3] << 24)) >>> 0) === SONGF.PER3) {
+        s.set(order, SONGF.ORDER_OFF);
+        await writeObject(link, 1, s);
+      }
+    }
+    // Samples last: the song is already on the machine if a slot write fails. Compare CRCs first, so
+    // loading a song whose slots did not change does not rewrite the flash.
+    if (samples && samples.size) {
+      let list;
+      try {
+        const L = parseList(await link.request(CMD.BK_LIST, [], { timeout: 5000, retries: 0 }));
+        if (L.rc) throw new Error("list rc " + L.rc);
+        list = L.items;
+      } catch (e) { e.sampleStage = true; throw e; }
+      for (const id of SONGF.SAMPLES) {
+        if (!samples.has(id)) continue;                 // a slot this file says nothing about stays as it is
+        const d = samples.get(id), slot = id - SONGF.SAMPLES[0];
+        const it = list.find((x) => x.id === id);
+        try {
+          if (!d.length) {
+            if (it && it.len) await smpErase(link, slot);
+            continue;
+          }
+          if (it && it.len === d.length && (it.crc >>> 0) === crc32(d)) { step(d.length); continue; }
+          const data = d.subarray(SMP.DATA_OFF);
+          let sent = 0;
+          await smpUpload(link, slot, d.subarray(0, SMP.HDR_LEN), data, (n) => { step(n - sent); sent = n; });
+          if (d.length > sent) step(d.length - sent);   // the header, or a header-only object
+        } catch (e) { e.sampleStage = true; throw e; }
+      }
+    }
+    return true;
+  }
+  /* The library keeps one full file (with samples). These make the shapes offered when sharing;
+     the file on disk is never modified. */
+  function songVariant(file, withSamples) {
+    const out = {};
+    for (const k of Object.keys(file)) if (k !== "samples" || withSamples) out[k] = file[k];
+    return out;
+  }
+  function songPlaylist(file) {
+    return { format: "sloop-playlist", version: 1, name: String(file.name || "").slice(0, 40),
+      date: file.date || new Date().toISOString(), songs: [file] };
   }
 
   /* ---- themes: 40 bytes, THM2 (or 36-byte THM1) ---- */
@@ -292,8 +496,10 @@
   function shareCode(bytes) { return "SLOOP-THEME-1:" + b64(bytes); }
 
   g.Sloop = {
-    CMD, THEME_ID, frame, unframe, pack7, unpack7, u35enc, crc32, Link, connect,
+    CMD, THEME_ID, SONGF, frame, unframe, pack7, unpack7, u35enc, crc32, Link, connect,
+    parseInfo, info, bkProjFormat, bkDevFormat, bkFwAtLeast,
     readObject, writeObject, project, live, backupCapture, backupRestore, setParam, smpInfo, smpUpload, smpErase, SMP,
+    songObjects, songCapture, songLoad, songVariant, songPlaylist,
     readTheme: (link) => readObject(link, THEME_ID),
     writeTheme: (link, bytes) => writeObject(link, THEME_ID, bytes),
     decodeTheme, encodeTheme, shareCode, b64, unb64

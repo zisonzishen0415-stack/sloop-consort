@@ -468,90 +468,317 @@
       el.textContent = ["A", "B", "C", "D"].map((s, i) => s + " " + (u[i] ? T("songs.used") : T("songs.free"))).join(" · ");
     } catch (e) { el.textContent = T("songs.readFail"); }
   }
-  function songFiles() {
+  // The phone's song library. A file can be a .sloopsong (loop + A-D + order), a .sloopset
+  // (playlist), a full SLOOP-backup JSON, or another JSON. All of them are managed here: open,
+  // load/restore, share, rename, delete; files found outside Download/SLOOP can be imported.
+  let songFilter = "all";
+  function fileKind(name) {
+    if (/\.sloopsong$/i.test(name)) return "song";
+    if (/\.sloopset$/i.test(name)) return "set";
+    if (/^SLOOP-backup-.*\.json$/i.test(name)) return "backup";
+    if (/\.json$/i.test(name)) return "file";
+    return "other";
+  }
+  const KIND = { song: "SONG", set: "SET", backup: "BACKUP", file: "JSON", other: "FILE" };
+  function bytes(n) {
+    n = +n || 0;
+    return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  }
+  function library() {
     if (!window.ConsortFiles) return [];
-    try { return JSON.parse(ConsortFiles.list()).filter((f) => /\.(sloopsong|sloopset)$/i.test(f.name)); }
-    catch (e) { return []; }
+    try {
+      return JSON.parse(ConsortFiles.list())
+        .filter((f) => f && /\.(sloopsong|sloopset|json)$/i.test(f.name || ""))
+        .map((f) => ({ ...f, kind: fileKind(f.name), managed: f.managed !== false, path: f.path || "Download/SLOOP/" }))
+        .sort((a, b) => (b.date || 0) - (a.date || 0));
+    } catch (e) { return []; }
+  }
+  function libraryJson(f) {
+    if (!window.ConsortFiles) throw new Error(T("songs.previewOnly"));
+    const text = ConsortFiles.readText(f.name, f.path || "");
+    if (text == null || text === "") throw new Error(T("songs.readFail", { name: f.name }));
+    return JSON.parse(text);
+  }
+  function friendly(e, key) {
+    if (e && e.sampleStage) return T("songs.loadSamplesFail", { err: e.message || String(e) });
+    if (/(^|\s)rc 3$|commit rc 3/.test(e && e.message ? e.message : "")) return T("songs.stopFirst");
+    return T(key, { err: e && e.message ? e.message : String(e) });
+  }
+  function sheet(buttons) {
+    const back = document.createElement("div");
+    back.className = "consort-back";
+    const box = document.createElement("div");
+    box.className = "consort-sheet";
+    box.append(...buttons);
+    back.appendChild(box);
+    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
+    document.body.appendChild(back);
+    return back;
+  }
+  function sbtn(label, fn, danger) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (danger) b.className = "danger";
+    b.addEventListener("click", () => { b.closest(".consort-back").remove(); fn(); });
+    return b;
+  }
+  function detailsBox(f) {
+    const box = document.createElement("div");
+    box.className = "sheetinfo";
+    const rows = [
+      [T("songs.name"), f.name],
+      [T("songs.type"), KIND[f.kind] || "FILE"],
+      [T("songs.size"), bytes(f.size)],
+      [T("songs.date"), f.date ? when(f.date * 1000) : "—"],
+      [T("songs.location"), (f.path || "").replace(/\/$/, "")]
+    ];
+    let data = null;
+    try { data = libraryJson(f); } catch (e) { /* unreadable or not JSON: the basics still show */ }
+    if (data && data.format === "sloop-song") {
+      rows.push([T("songs.songName"), data.name || "—"]);
+      rows.push([T("songs.firmware"), data.firmware || "—"]);
+      rows.push([T("songs.sections"), String((data.objects || []).filter((o) => o.id !== 0).length) + " / 4"]);
+      rows.push([T("songs.order"), data.order ? T("songs.yes") : T("songs.no")]);
+      rows.push([T("songs.samples"), Array.isArray(data.samples) && data.samples.length ? "USR1–4" : T("songs.no")]);
+    } else if (data && data.format === "sloop-backup") {
+      rows.push([T("songs.firmware"), data.firmware || "—"]);
+      rows.push([T("songs.objects"), String((data.objects || []).length)]);
+      rows.push([T("songs.samples"), (data.objects || []).some((o) => o.id >= 32 && o.id <= 35) ? T("songs.yes") : T("songs.no")]);
+    } else if (data && data.format === "sloop-playlist") {
+      rows.push([T("songs.playlist"), T("songs.playlistCount", { n: (data.songs || []).length })]);
+    } else if (data && data.format) {
+      rows.push([T("songs.format"), String(data.format)]);
+    }
+    for (const [k, v] of rows) {
+      const line = document.createElement("div");
+      line.className = "sheetrow";
+      const a = document.createElement("span");
+      a.textContent = k;
+      const b = document.createElement("b");
+      b.textContent = v;
+      line.append(a, b);
+      box.appendChild(line);
+    }
+    return box;
+  }
+  function shareFile(f) {
+    if (!window.ConsortFiles) { toastMsg(T("songs.previewOnly")); return; }
+    try { ConsortFiles.shareAt(f.name, f.path || ""); }
+    catch (e) { toastMsg(T("songs.shareFail", { name: f.name })); }
+  }
+  function shareVariant(f, data, ext) {
+    const base = String(f.name || data.name || "SONG").replace(/\.(sloopsong|sloopset|json)$/i, "")
+      .replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 40) || "SONG";
+    const name = base + "." + ext;
+    if (!window.ConsortFiles || !ConsortFiles.shareText) { toastMsg(T("songs.previewOnly")); return; }
+    let ok = false;
+    try { ok = ConsortFiles.shareText(name, JSON.stringify(data), "application/json"); }
+    catch (e) { ok = false; }
+    if (!ok) toastMsg(T("songs.shareFail", { name }));
+  }
+  // The library keeps the full file (song + samples). Sharing offers the shapes another app may want;
+  // the file on disk stays as it is.
+  function shareSong(f) {
+    let file;
+    try { file = libraryJson(f); Sloop.songObjects(file); }
+    catch (e) { toastMsg(T("songs.loadBad", { err: e.message })); return; }
+    const hasSamples = Array.isArray(file.samples) && file.samples.length > 0;
+    const cap = document.createElement("p");
+    cap.className = "hint";
+    cap.style.margin = "2px 4px 8px";
+    cap.textContent = T("songs.exportSamplesHint");
+    const btns = [
+      sbtn(T("songs.exportOnly"), () => shareVariant(f, Sloop.songVariant(file, false), "sloopsong"))
+    ];
+    if (hasSamples) btns.push(sbtn(T("songs.exportSamples"), () => shareVariant(f, Sloop.songVariant(file, true), "sloopsong")));
+    btns.push(sbtn(T("songs.sharePlaylist"), () => shareVariant(f, Sloop.songPlaylist(file), "sloopset")));
+    btns.push(sbtn(T("menu.cancel"), () => {}));
+    const back = sheet(btns);
+    back.querySelector(".consort-sheet").prepend(cap);
+  }
+  function renameFile(f) {
+    const to = prompt(T("menu.newName"), f.name);
+    if (!to || to === f.name) return;
+    let ok = false;
+    if (window.ConsortFiles) {
+      try { ok = ConsortFiles.renameAt(f.name, f.path || "", to); } catch (e) { ok = false; }
+    }
+    if (!ok) { toastMsg(T("file.renameFail", { name: f.name })); return; }
+    renderSongs();
+  }
+  function deleteFile(f) {
+    if (!confirm(T("deleteConfirm", { name: f.name }))) return;
+    let ok = false;
+    if (window.ConsortFiles) {
+      try { ok = ConsortFiles.deleteAt(f.name, f.path || ""); } catch (e) { ok = false; }
+    }
+    if (!ok) { toastMsg(T("file.deleteFail", { name: f.name })); return; }
+    renderSongs();
+    toastMsg(T("deleted", { name: f.name }));
+  }
+  function importFile(f) {
+    let name = null;
+    if (window.ConsortFiles) {
+      try { name = ConsortFiles.importToLibrary(f.name, f.path || ""); } catch (e) { name = null; }
+    }
+    // Another app's download may not be readable in place; the system picker grants access for one read.
+    if (!name) { toastMsg(T("songs.importFail", { err: f.name })); importSong(); return; }
+    renderSongs();
+    toastMsg(T("songs.importedToLibrary", { name }));
+  }
+  function openFile(f) {
+    if (!window.ConsortFiles) { toastMsg(T("songs.previewOnly")); return; }
+    try { ConsortFiles.openWith(f.name, f.path || ""); }
+    catch (e) { toastMsg(T("songs.openFail", { name: f.name })); }
+  }
+  async function loadSong(f) {
+    if (!link) { toastMsg(T("needConnect")); return; }
+    let file, parsed;
+    try {
+      file = libraryJson(f);
+      parsed = Sloop.songObjects(file);
+    } catch (e) { toastMsg(T("songs.loadBad", { err: e.message })); return; }
+    const hasSamples = !!(parsed.samples && parsed.samples.size);
+    if (!confirm(T(hasSamples ? "songs.loadConfirmSamples" : "songs.loadConfirm",
+      { name: file.name || f.name }))) return;
+    toastMsg(T("songs.loading", { pct: 0 }));
+    try {
+      await Sloop.songLoad(link, file, (d, t) => toastMsg(T("songs.loading", { pct: Math.round(d / t * 100) })));
+      toastMsg(T("songs.loaded", { name: file.name || f.name }));
+      refreshSections();
+    } catch (e) { toastMsg(friendly(e, "songs.loadFail")); }
+  }
+  async function restorePhoneBackup(f) {
+    if (!link) { toastMsg(T("needConnect")); return; }
+    let file;
+    try { file = libraryJson(f); }
+    catch (e) { toastMsg(T("songs.restoreFileBad")); return; }
+    if (!file || file.format !== "sloop-backup" || !Array.isArray(file.objects)) {
+      toastMsg(T("songs.notBackup"));
+      return;
+    }
+    if (!confirm(T("songs.restoreConfirm", { name: file.name || f.name }))) return;
+    restoreBackup({ name: file.name || f.name, file }, true);
+  }
+  function fileActions(f) {
+    const box = detailsBox(f);
+    const btns = [];
+    if (f.kind === "song") btns.push(sbtn(T("songs.load"), () => loadSong(f)));
+    if (f.kind === "backup" || f.kind === "file") btns.push(sbtn(T("songs.restoreThis"), () => restorePhoneBackup(f)));
+    if (!f.managed) btns.push(sbtn(T("songs.importToLibrary"), () => importFile(f)));
+    btns.push(sbtn(T("menu.share"), () => (f.kind === "song" ? shareSong(f) : shareFile(f))));
+    btns.push(sbtn(T("menu.rename"), () => renameFile(f)));
+    btns.push(sbtn(T("songs.openWith"), () => openFile(f)));
+    btns.push(sbtn(T("menu.delete"), () => deleteFile(f), true));
+    btns.push(sbtn(T("menu.cancel"), () => {}));
+    const back = sheet(btns);
+    back.querySelector(".consort-sheet").prepend(box);
+  }
+  function songMenu(f) { fileActions(f); }
+  function primaryAction(f) {
+    if (f.kind === "song") return [T("songs.load"), () => loadSong(f)];
+    if (f.kind === "backup" || f.kind === "file") return [T("songs.restoreThis"), () => restorePhoneBackup(f)];
+    return null;
   }
   function renderSongs() {
     const box = document.getElementById("songs-list");
     const empty = document.getElementById("songs-empty");
+    const count = document.getElementById("songs-count");
     if (!box) return;
-    const list = songFiles();
+    const all = library();
+    const list = all.filter((f) => songFilter === "all"
+      || (songFilter === "song" && (f.kind === "song" || f.kind === "set"))
+      || (songFilter === "backup" && (f.kind === "backup" || f.kind === "file")));
     box.replaceChildren();
-    if (empty) empty.style.display = list.length ? "none" : "";
+    if (count) count.textContent = list.length + (list.length !== all.length ? " / " + all.length : "");
+    if (empty) {
+      empty.style.display = list.length ? "none" : "";
+      empty.textContent = all.length ? T("songs.noneMatch") : (window.ConsortFiles ? T("songs.none") : T("songs.previewOnly"));
+    }
     list.forEach((f) => {
       const row = document.createElement("div");
       row.className = "song";
+      const kind = document.createElement("span");
+      kind.className = "type " + f.kind;
+      kind.textContent = KIND[f.kind] || "FILE";
       const info = document.createElement("div");
+      info.className = "grow";
       const b = document.createElement("b");
       b.textContent = f.name;
       const sp = document.createElement("span");
-      sp.textContent = (f.size ? (f.size / 1024).toFixed(1) + " KB" : "") + (f.date ? " · " + when(f.date * 1000) : "");
+      sp.textContent = [bytes(f.size), f.date ? when(f.date * 1000) : "", f.managed ? "" : T("songs.external")]
+        .filter(Boolean).join(" · ");
       info.append(b, sp);
+      const acts = document.createElement("div");
+      acts.className = "row";
+      acts.style.gap = "6px";
+      acts.style.marginLeft = "auto";
+      const main = primaryAction(f);
+      if (main) {
+        const mb = document.createElement("button");
+        mb.className = "mini pri";
+        mb.textContent = main[0];
+        mb.addEventListener("click", (e) => { e.stopPropagation(); main[1](); });
+        acts.appendChild(mb);
+      }
       const more = document.createElement("button");
       more.className = "mini";
       more.textContent = "⋯";
       more.addEventListener("click", (e) => { e.stopPropagation(); songMenu(f); });
-      row.append(info, more);
-      row.addEventListener("click", () => { if (window.ConsortFiles) { try { ConsortFiles.share(f.name); } catch (e) { /* gone */ } } });
+      acts.appendChild(more);
+      row.append(kind, info, acts);
+      row.addEventListener("click", () => fileActions(f));
       box.appendChild(row);
     });
-  }
-  function songMenu(f) {
-    const back = document.createElement("div");
-    back.className = "consort-back";
-    const sheet = document.createElement("div");
-    sheet.className = "consort-sheet";
-    const share = document.createElement("button");
-    share.textContent = T("menu.share");
-    share.addEventListener("click", () => { back.remove(); if (window.ConsortFiles) ConsortFiles.share(f.name); });
-    const ren = document.createElement("button");
-    ren.textContent = T("menu.rename");
-    ren.addEventListener("click", () => {
-      back.remove();
-      const to = prompt(T("menu.newName"), f.name);
-      if (!to) return;
-      let ok = true;
-      if (window.ConsortFiles) { try { ok = ConsortFiles.rename(f.name, to); } catch (e) { ok = false; } }
-      if (!ok) { toastMsg(T("file.renameFail", { name: f.name })); return; }
-      renderSongs();
-    });
-    const del = document.createElement("button");
-    del.textContent = T("menu.delete");
-    del.className = "danger";
-    del.addEventListener("click", () => {
-      back.remove();
-      if (!confirm(T("deleteConfirm", { name: f.name }))) return;
-      let ok = true;
-      if (window.ConsortFiles) { try { ok = ConsortFiles.delete(f.name); } catch (e) { ok = false; } }
-      if (!ok) { toastMsg(T("file.deleteFail", { name: f.name })); return; }
-      renderSongs();
-      toastMsg(T("deleted", { name: f.name }));
-    });
-    const cancel = document.createElement("button");
-    cancel.textContent = T("menu.cancel");
-    cancel.addEventListener("click", () => back.remove());
-    sheet.append(share, ren, del, cancel);
-    back.appendChild(sheet);
-    back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
-    document.body.appendChild(back);
   }
   function importSong() {
     const inp = document.createElement("input");
     inp.type = "file";
-    inp.accept = ".sloopsong,.json,application/json";
+    inp.multiple = true;
+    inp.accept = ".sloopsong,.sloopset,.json,application/json";
     inp.addEventListener("change", async () => {
-      const file = inp.files && inp.files[0];
-      if (!file) return;
-      try {
-        const r = await fetch("/save?name=" + encodeURIComponent(file.name) + "&type=application/json", { method: "POST", body: file });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        toastMsg(T("songs.imported", { name: file.name }));
+      const files = [...(inp.files || [])];
+      if (!files.length) return;
+      let ok = 0;
+      for (const file of files) {
+        try {
+          const r = await fetch("/save?name=" + encodeURIComponent(file.name) + "&type=application/json",
+            { method: "POST", body: file });
+          if (r.ok) ok++;
+        } catch (e) { /* report below */ }
+      }
+      if (ok) {
+        toastMsg(ok === 1 ? T("songs.imported", { name: files[0].name }) : T("songs.importedMany", { n: ok }));
         renderSongs();
-      } catch (e) { toastMsg(T("songs.importFail", { err: e.message })); }
+      } else {
+        toastMsg(T("songs.importFail", { err: files[0].name }));
+      }
     });
     inp.click();
+  }
+
+  // One capture, always the full artifact: loop, sections A-D, order and USR1-4. The share sheet
+  // turns it into a canonical .sloopsong, the full .sloopsong, or a .sloopset, without touching it.
+  async function saveSong() {
+    if (!link) { toastMsg(T("needConnect")); return; }
+    const d = new Date(), p = (n) => (n < 10 ? "0" : "") + n;
+    const def = "SONG " + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+    const name = prompt(T("songs.exportName"), def);
+    if (name == null) return;
+    const btn = document.getElementById("song-export");
+    if (btn) { btn.disabled = true; btn.textContent = T("songs.exporting"); }
+    try {
+      const file = await Sloop.songCapture(link, (name.trim() || def).slice(0, 40), (done, total) => {
+        if (btn && total) btn.textContent = Math.round(done / total * 100) + "%";
+      }, true);
+      const safe = String(file.name || "SONG").replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 40) || "SONG";
+      const r = await fetch("/save?name=" + encodeURIComponent(safe + ".sloopsong") + "&type=application/json",
+        { method: "POST", body: JSON.stringify(file) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      toastMsg(T("songs.exportedSamples", { name: file.name }));
+      renderSongs();
+    } catch (e) { toastMsg(T("songs.exportFail", { err: e.message })); }
+    if (btn) { btn.disabled = false; btn.textContent = T("songs.export"); }
   }
   function backups() {
     try { return JSON.parse(localStorage.getItem("consort.backups") || "[]"); } catch (e) { return []; }
@@ -585,30 +812,49 @@
       } catch (e) {
         toastMsg(fileSaved ? T("songs.backupFileOnly", { n: file.objects.length }) : T("storage.fail"));
       }
+      if (fileSaved) renderSongs();
     } catch (e) { toastMsg(T("songs.backupFail", { err: e.message })); }
     if (btn) { btn.disabled = false; btn.textContent = T("songs.backup"); }
   }
 
   function backupSheet() {
     const list = backups();
+    const phone = library().filter((f) => f.kind === "backup" || f.kind === "file");
     const back = document.createElement("div");
     back.className = "consort-back";
     const sheet = document.createElement("div");
     sheet.className = "consort-sheet";
+    if (phone.length) {
+      const cap = document.createElement("div");
+      cap.className = "sheetcap";
+      cap.textContent = T("songs.phoneBackups");
+      sheet.appendChild(cap);
+      phone.forEach((f) => {
+        const btn = document.createElement("button");
+        btn.textContent = f.name;
+        btn.addEventListener("click", () => { back.remove(); restorePhoneBackup(f); });
+        sheet.appendChild(btn);
+      });
+    }
+    if (list.length) {
+      const cap = document.createElement("div");
+      cap.className = "sheetcap";
+      cap.textContent = T("songs.appBackups");
+      sheet.appendChild(cap);
+    }
     list.forEach((b) => {
       const btn = document.createElement("button");
       btn.textContent = b.name;
       btn.addEventListener("click", () => { back.remove(); restoreBackup(b); });
       sheet.appendChild(btn);
     });
-    const cancel = document.createElement("button");
-    cancel.textContent = T("menu.cancel");
-    cancel.addEventListener("click", () => back.remove());
     const fromFile = document.createElement("button");
     fromFile.textContent = T("songs.restoreFile");
     fromFile.addEventListener("click", () => { back.remove(); restoreFromFile(); });
-    sheet.appendChild(fromFile);
-    sheet.appendChild(cancel);
+    const cancel = document.createElement("button");
+    cancel.textContent = T("menu.cancel");
+    cancel.addEventListener("click", () => back.remove());
+    sheet.append(fromFile, cancel);
     back.appendChild(sheet);
     back.addEventListener("click", (e) => { if (e.target === back) back.remove(); });
     document.body.appendChild(back);
@@ -628,15 +874,15 @@
           return;
         }
         if (!confirm(T("songs.restoreConfirm", { name: f.name }))) return;
-        restoreBackup({ name: f.name, file: data });
+        restoreBackup({ name: f.name, file: data }, true);
       } catch (e) { toastMsg(T("songs.restoreFileBad")); }
     });
     inp.click();
   }
 
-  async function restoreBackup(b) {
+  async function restoreBackup(b, confirmed) {
     if (!link) { toastMsg(T("needConnect")); return; }
-    if (!confirm(T("songs.restoreConfirm", { name: b.name }))) return;
+    if (!confirmed && !confirm(T("songs.restoreConfirm", { name: b.name }))) return;
     const btn = document.getElementById("bk-restore");
     if (btn) { btn.disabled = true; btn.textContent = T("songs.restoring"); }
     try {
@@ -652,12 +898,22 @@
   document.getElementById("bk-save").addEventListener("click", backupSave);
   document.getElementById("bk-restore").addEventListener("click", backupSheet);
   document.getElementById("song-import").addEventListener("click", importSong);
+  const songExport = document.getElementById("song-export");
+  if (songExport) songExport.addEventListener("click", saveSong);
+  const songsRefresh = document.getElementById("songs-refresh");
+  if (songsRefresh) songsRefresh.addEventListener("click", renderSongs);
+  document.querySelectorAll(".songfilter button").forEach((b) => b.addEventListener("click", () => {
+    songFilter = b.dataset.filter;
+    document.querySelectorAll(".songfilter button").forEach((x) => x.classList.toggle("on", x === b));
+    renderSongs();
+  }));
   const songsTab = document.querySelector('nav button[data-page="p-songs"]');
   if (songsTab) songsTab.addEventListener("click", () => { refreshSections(); renderSongs(); });
 
   document.getElementById("th-read").addEventListener("click", readCurrent);
   document.getElementById("th-save").addEventListener("click", saveCurrent);
   document.getElementById("th-import").addEventListener("click", importCode);
+  renderSongs();
   renderPhoneThemes();
   try {
     if (window.ConsortFiles && ConsortFiles.version) {

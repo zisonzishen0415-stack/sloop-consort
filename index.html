@@ -74,6 +74,7 @@
         <button class="pri" id="smp-upload">Send to USR1</button>
       </div>
       <p class="hint" id="smp-hint" data-i18n="smp.hint">Records through the phone mic, 7 s max; uploads as 22050 Hz mono ADPCM.</p>
+      <p class="hint" data-i18n="smp.shared">USR1–4 live on the machine and are shared by every song; loading a song does not switch them. A full backup does.</p>
     </div>
 
     <div class="card">
@@ -138,19 +139,29 @@
         <span class="status" id="song-status">-</span>
         <span class="pill off" id="song-pill">Not connected</span>
       </div>
-      <p class="hint" data-i18n="songs.hint">Sections are still edited on the SONG screen; a backup carries songs, sections, settings and presets (sample slots later).</p>
+      <p class="hint" data-i18n="songs.hint">Sections are still edited on the SONG screen. A full backup carries songs, sections, settings, presets and the four sample slots.</p>
       <div class="row" style="margin-top:12px">
         <button class="grow pri" id="bk-save" data-i18n="songs.backup">Back up to phone</button>
         <button class="grow" id="bk-restore" data-i18n="songs.restore">Restore from backup</button>
       </div>
+      <button class="wide" style="margin-top:8px" id="song-export" data-i18n="songs.export">Save song + samples to phone</button>
     </div>
 
     <div class="card">
-      <h2 data-i18n="songs.phone">On this phone</h2>
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0" data-i18n="songs.phone">On this phone</h2>
+        <button class="mini" id="songs-refresh" data-i18n="songs.refresh">Refresh</button>
+      </div>
+      <div class="row songfilter" style="gap:6px;margin:9px 0 2px">
+        <button class="mini on" data-filter="all" data-i18n="songs.all">All</button>
+        <button class="mini" data-filter="song" data-i18n="songs.filterSongs">Songs</button>
+        <button class="mini" data-filter="backup" data-i18n="songs.filterBackups">Backups</button>
+        <span class="hint" id="songs-count" style="margin-left:auto"></span>
+      </div>
       <div id="songs-list"></div>
       <p class="hint" id="songs-empty" data-i18n="songs.none">No song files yet.</p>
-      <p class="hint" data-i18n="songs.hint2">Tap a row to share it to another app. ⋯: rename / delete (asks first).</p>
-      <button class="wide" style="margin-top:10px" id="song-import" data-i18n="songs.import">Import a .sloopsong file</button>
+      <p class="hint" data-i18n="songs.hint2">Tap a row to manage it. A SONG loads back onto the FM-1 (loop and A–D); a BACKUP restores everything, including the samples.</p>
+      <button class="wide" style="margin-top:10px" id="song-import" data-i18n="songs.import">Import song files</button>
     </div>
   </section>
 

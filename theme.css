@@ -99,6 +99,18 @@ button.wide{width:100%}
 .song b{display:block;font-size:14px;font-weight:400;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .song span{display:block;color:var(--dim);font-size:10px;margin-top:2px}
 .song .mini{margin-left:auto}
+.song .type{flex:none;font-size:9px;line-height:12px;letter-spacing:.06em;color:var(--dim);border:1px solid var(--line);padding:2px 4px}
+.song .type.song{color:var(--acc);border-color:var(--acc)}
+.song .type.set{color:var(--t2);border-color:var(--t2)}
+.song .type.backup{color:var(--t3);border-color:var(--t3)}
+.song .grow{min-width:0}
+.songfilter{flex-wrap:wrap}
+.songfilter button.on{background:var(--acc);color:var(--ink)}
+.sheetinfo{display:flex;flex-direction:column;gap:4px;padding:4px 4px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.sheetrow{display:flex;gap:10px;font-size:12px;line-height:17px}
+.sheetrow span{color:var(--dim);flex:none;min-width:6.5em}
+.sheetrow b{color:var(--fg);font-weight:400;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.sheetcap{color:var(--dim);font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:6px 4px 0}
 
 .themerow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
 .themerow:first-of-type{border-top:0}

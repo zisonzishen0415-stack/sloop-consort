@@ -16,7 +16,7 @@ The FM-1 remains the instrument. Consort is the extra pair of hands:
 
 1. **An external sampler and sample management.** Record through the phone mic (up to 7 s), trim, normalize, fade, set the root note and loop, name it, and send it to USR1–4. Takes stay on the phone as WAV files; the slots can be inspected and erased from the same page.
 2. **Punch-in FX without key combos.** All 27 effects are on one dense page, grouped by time, filter, tone and motion. Hold a pad to engage it, release to let go; the master FILTER / DUST / DUCK sliders sit above.
-3. **Project files.** The FM-1 keeps one project; Consort backs the whole thing up to the phone (and to a JSON file in `Download/SLOOP`), restores it, and manages a phone-side library of `.sloopsong` files: import, rename, share, delete.
+3. **Project files.** The FM-1 keeps one project; Consort backs the whole thing up to the phone (and to a JSON file in `Download/SLOOP`) and restores it, including the four sample slots. The Songs page is also a phone-side library of `.sloopsong`, `.sloopset` and backup files: load a song onto the FM-1, restore a backup, import from Downloads, share, rename, delete or open a file elsewhere. Saving a song captures it once, in full: loop, sections A–D, order and USR1–4. The library keeps that one master file; when sharing, choose the shape the other app needs — a canonical `.sloopsong`, the full `.sloopsong`, or a one-song `.sloopset`.
 4. **Theme sync.** Read the current theme from the machine, save it on the phone, write it back, and wear the same colours as the app's own skin. Themes can also travel as share codes.
 
 Everything else stays where it belongs: sequencing, sections and patterns on the SONG screen, sound design on the FM-1 or in the web editor. This is not a replacement editor.
@@ -25,7 +25,7 @@ Everything else stays where it belongs: sequencing, sections and patterns on the
 
 - **Sampler** — IMA ADPCM at 22050 Hz mono, written over the same USB MIDI link SLOOP uses; a hard 7-second cap keeps it inside the 80 KiB slot. Audition follows the trim, and loops in LOOP mode.
 - **FX** — LIVE op 3, held and released, so an effect can never stick. The names are the machine's own.
-- **Songs** — PROJECT for the section status; backup objects for the full state. A backup is written both to the app and to a JSON file, so clearing the WebView's storage does not lose it. Restore from the last five backups or from a file.
+- **Songs** — PROJECT for the section status; backup objects for the full state. A backup is written both to the app and to a JSON file, so clearing the WebView's storage does not lose it. Restore from the phone library, the last five in-app backups, or a file. USR1–4 are global flash slots shared by every song. Consort's master song file is still a `.sloopsong`, but adds a top-level `samples` array (ids 32–35) beside `objects`; loading it restores those slots too. Sharing offers three generated shapes without changing the master: a canonical `.sloopsong` (loop, A–D and order only, upstream-compatible), the full `.sloopsong`, or a one-song `.sloopset` playlist (the samples ride along as opaque data). The upstream SLOOP editor ignores unknown top-level fields, so it still loads the song, but it does not apply the samples and drops them if the song is saved again there. A full backup remains the complete, restorable snapshot of everything, sample slots included.
 - **Skins and settings** — the theme is object 11 on the FM-1 (THM2); the app derives its palette from it with contrast lifting so text stays readable. Eight interface languages, English by default.
 - No firmware is modified. The FM-1 is reached through Android's USB MIDI (`android.media.midi`), not Web MIDI. Phones need USB host / OTG; the FM-1's USB port must be the one that exposes MIDI.
 
@@ -52,7 +52,7 @@ SLOOP 2.7 over USB MIDI: `F0 7D 46 4C <cmd> <7-bit args> F7`. Framing, request/r
 index.html   the four pages and the banner
 theme.css    SLOOP's visual language (Terminus, square controls)
 i18n.js      the eight interface languages
-protocol.js  framing, Link, backup objects, themes, SMP
+protocol.js  framing, Link, backup objects, .sloopsong, themes, SMP
 app.js       skin, FX, songs, settings
 samples.js   the sampler
 android/     WebView shell, local server, USB MIDI bridge, file bridge
@@ -69,9 +69,10 @@ This is how the sampler, FX, theme, backup and restore paths are verified end-to
 ## Status
 
 Verified through the APK against the virtual FM-1: INFO, sample encode/upload to USR and erase, FX
-press/release, global SET, theme read/save/write-back and skin, and backup to `Download/SLOOP` with
-restore. On real hardware, the USB MIDI handshake and section status are confirmed on an FM-1; a
-final pass on the machine is still worthwhile for the sampler/FX/theme/backup writes. Bug reports are
+press/release, global SET, theme read/save/write-back and skin, backup to `Download/SLOOP` with
+restore (samples included), and `.sloopsong` save/load through the phone library. On real hardware,
+the USB MIDI handshake and section status are confirmed on an FM-1; a final pass on the machine is
+still worthwhile for the sampler/FX/theme/backup writes and the song load path. Bug reports are
 welcome.
 
 ## Credits and licences
