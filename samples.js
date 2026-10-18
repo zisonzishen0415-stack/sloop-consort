@@ -21,6 +21,7 @@
   let recorder = null, recRAF = 0, recCtx = null, recAnalyser = null, recBuf = null, recT0 = 0;
   let livePeaks = null, liveLen = 0, liveScale = 0.06;
   let history = [];                          // copy-on-write states; a destructive edit makes a new pcm
+  let zones = [];                            // a multi-sample instrument: one zone per take/root
   let lastInfo = null, lastErr = null;
   let dbp = null;
 
@@ -31,10 +32,14 @@
   const recording = () => !!(recorder && recorder.state === "recording");
   const secs = (s) => (s < 1 ? s.toFixed(3) : s.toFixed(2)) + " s";
 
-  function imaEncode(x) {
-    let pred = 0, idx = 0;
+  // IMA ADPCM, 4 bit, low nibble first, from predictor 0 / index 0. The decoder state at the loop
+  // start is what the FM-1 restores when it wraps (eng_sample.c), so capture it as upstream's
+  // sampleio.ima_encode does; without it a loop that starts past 0 clicks on every wrap.
+  function imaEncode(x, loopStart) {
+    let pred = 0, idx = 0, st = { pred: 0, idx: 0 };
     const nib = new Uint8Array(x.length + (x.length & 1));
     for (let n = 0; n < x.length; n++) {
+      if (n === loopStart) st = { pred, idx };
       const step = IMA_STEP[idx];
       let diff = x[n] - pred, code = 0;
       if (diff < 0) { code = 8; diff = -diff; }
@@ -48,20 +53,37 @@
     }
     const out = new Uint8Array(nib.length >> 1);
     for (let k = 0; k < nib.length; k += 2) out[k >> 1] = nib[k] | (nib[k + 1] << 4);
-    return out;
+    return { data: out, pred: st.pred, idx: st.idx };
   }
 
+  // sampleio.key_split: each zone reaches halfway to its neighbours, the outer ones to 0 and 127.
+  function keySplit(roots) {
+    const r = roots.slice().sort((a, b) => a - b), n = r.length;
+    return r.map((x, j) => [j ? ((r[j - 1] + x) >> 1) + 1 : 0, j === n - 1 ? 127 : (x + r[j + 1]) >> 1]);
+  }
+
+  // One user slot: up to 16 zones, sorted by root, ADPCM concatenated, 480-B header at 0.
   function buildSlot(name, zones) {
-    const parts = [], zs = [];
+    const parts = [], zs = zones.map((z) => ({
+      s: z.s, root: z.root | 0, lo: z.lo, hi: z.hi,
+      looped: z.loop ? 2 : 0, ls: z.ls, le: z.le
+    })).sort((a, b) => a.root - b.root);
+    if (!zs.length || zs.length > SMPC.MAX_ZONES) throw new Error("1.." + SMPC.MAX_ZONES + " zones");
+    const split = keySplit(zs.map((z) => z.root));
     let len = 0;
-    for (const z of zones) {
-      const data = imaEncode(z.s);
-      const le = z.le == null ? z.s.length - 1 : Math.max(0, Math.min(z.s.length - 1, z.le | 0));
-      const ls = z.ls == null ? 0 : Math.max(0, Math.min(le, z.ls | 0));
-      zs.push({ off: len, n: z.s.length, ls, le, root: z.root, looped: z.loop ? 2 : 0 });
-      parts.push(data);
-      len += data.length;
-    }
+    zs.forEach((z, j) => {
+      if (z.lo == null || z.hi == null) { z.lo = split[j][0]; z.hi = split[j][1]; }
+      z.lo = Math.max(0, Math.min(127, z.lo | 0));
+      z.hi = Math.max(z.lo, Math.min(127, z.hi | 0));
+      z.le = z.le == null ? z.s.length - 1 : Math.max(0, Math.min(z.s.length - 1, z.le | 0));
+      z.ls = z.ls == null ? 0 : Math.max(0, Math.min(z.le, z.ls | 0));
+      const e = imaEncode(z.s, z.ls);
+      z.data = e.data; z.pred = e.pred; z.idx = e.idx;
+      z.n = z.s.length;
+      z.off = len;
+      parts.push(e.data);
+      len += e.data.length;
+    });
     if (len > SMPC.MAX_DATA) throw new Error(T("smp.tooLong"));
     const data = new Uint8Array(len);
     let o = 0;
@@ -79,10 +101,10 @@
       const b = 32 + j * 28;
       [z.off, z.n, z.ls, z.le, rate].forEach((x, k) => v.setUint32(b + k * 4, x >>> 0, true));
       v.setInt16(b + 20, z.root * 16, true);
-      v.setInt16(b + 22, 0, true);
-      hdr[b + 24] = 0;
-      hdr[b + 25] = 0;
-      hdr[b + 26] = 127;
+      v.setInt16(b + 22, z.pred, true);        // decoder state at the loop start
+      hdr[b + 24] = z.idx;
+      hdr[b + 25] = z.lo;
+      hdr[b + 26] = z.hi;
       hdr[b + 27] = z.looped;
     });
     return { hdr, data };
@@ -114,15 +136,53 @@
     }
     return o;
   }
-  function wavBytes(pcm, rate) {
-    const ab = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(ab);
+  // WAV with a "smpl" chunk (one forward loop, inclusive start/end), as upstream sampleio.read_wav
+  // reads it. The loop points are in the output's own samples, so they survive a round trip.
+  function wavBytes(pcm, rate, loop) {
+    const n = pcm.length * 2;
+    const ab = new ArrayBuffer(112 + n), v = new DataView(ab);
     const str = (o, t) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, t.charCodeAt(i)); };
-    str(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVE");
+    str(0, "RIFF"); v.setUint32(4, 104 + n, true); str(8, "WAVE");
     str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
     v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-    str(36, "data"); v.setUint32(40, pcm.length * 2, true);
-    new Uint8Array(ab, 44).set(new Uint8Array(pcm.buffer));
+    str(36, "smpl"); v.setUint32(40, 60, true);
+    v.setUint32(44, 0, true); v.setUint32(48, 0, true);                   // manufacturer, product
+    v.setUint32(52, Math.round(1e9 / rate), true);                       // sample period, ns
+    v.setUint32(56, loop ? Math.max(0, Math.min(127, loop.root | 0)) : 60, true);
+    v.setUint32(60, 0, true); v.setUint32(64, 0, true); v.setUint32(68, 0, true);
+    const has = !!(loop && loop.end > loop.start);
+    v.setUint32(72, has ? 1 : 0, true); v.setUint32(76, 0, true);        // loops, sampler data
+    v.setUint32(80, 0, true); v.setUint32(84, 0, true);                  // cue id, type: forward
+    v.setUint32(88, has ? Math.max(0, loop.start | 0) : 0, true);
+    v.setUint32(92, has ? Math.min(pcm.length - 1, loop.end | 0) : 0, true);
+    v.setUint32(96, 0, true); v.setUint32(100, 0, true);                 // fraction, play count
+    str(104, "data"); v.setUint32(108, n, true);
+    new Uint8Array(ab, 112).set(new Uint8Array(pcm.buffer, pcm.byteOffset, n));
     return new Uint8Array(ab);
+  }
+  // The RIFF chunks Consort cares about: the rate smpl offsets are counted in, and the first loop.
+  function wavLoopInfo(ab) {
+    const d = new DataView(ab);
+    if (d.byteLength < 12 || d.getUint32(0, true) !== 0x46464952 || d.getUint32(8, true) !== 0x45564157) return null;
+    let rate = 0, smpl = -1;
+    for (let o = 12; o + 8 <= d.byteLength;) {
+      const id = d.getUint32(o, true), len = d.getUint32(o + 4, true);
+      if (id === 0x20746D66 && len >= 16) rate = d.getUint32(o + 12, true);
+      else if (id === 0x6C706D73) smpl = o + 8;
+      o += 8 + len + (len & 1);
+    }
+    if (!rate) return null;
+    if (smpl < 0 || smpl + 60 > d.byteLength || !d.getUint32(smpl + 28, true)) return { rate };
+    return { rate, start: d.getUint32(smpl + 44, true), end: d.getUint32(smpl + 48, true) };
+  }
+  // smpl offsets are in the file's samples; decodeAudioData hands back the device's rate.
+  function wavLoopState(meta, pcm, decodedRate) {
+    if (!meta || meta.start == null || !(meta.end > meta.start)) return null;
+    const k = meta.rate && decodedRate ? decodedRate / meta.rate : 1;
+    const a = Math.round(meta.start * k), b = Math.round((meta.end + 1) * k);   // end is inclusive
+    if (a < 0 || b > pcm.length + 1 || b - a < 2) return null;
+    return { mode: b >= pcm.length - 1 ? 1 : 2,
+      pts: { a: Math.max(0, Math.min(1, a / pcm.length)), b: Math.max(0, Math.min(1, b / pcm.length)) } };
   }
   function clock(sec) {
     const m = Math.floor(sec / 60), s = sec - m * 60;
@@ -292,7 +352,9 @@
     if (inf) inf.textContent = lastInfo ? T("smp.slotInfo", { n: slot + 1, kib: lastInfo.slotKiB })
       : (lastErr ? T("smp.slotInfoFail", { err: lastErr }) : T("smp.offline"));
     const send = document.getElementById("smp-upload");
-    if (send) send.textContent = T("smp.send", { n: slot + 1 });
+    if (send) send.textContent = zones.length
+      ? T("smp.sendZones", { n: zones.length, k: slot + 1 })
+      : T("smp.send", { n: slot + 1 });
   }
   function refresh() {
     if (!link()) { lastInfo = null; lastErr = null; paintSlots(); return Promise.resolve(); }
@@ -609,9 +671,9 @@
     setTrim(trim.a, trim.b);
     toast(T("smp.tuned", { note: noteName(root) }));
   }
-  async function saveWav(pcm, name) {
+  async function saveWav(pcm, name, loop) {
     const r = await fetch("/save?name=" + encodeURIComponent(name) + "&type=audio/wav",
-      { method: "POST", body: wavBytes(toInt16(pcm), SMPC.RATE) });
+      { method: "POST", body: wavBytes(toInt16(pcm), SMPC.RATE, loop) });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const where = (await r.text()).trim();
     return where || name;
@@ -619,15 +681,68 @@
   async function saveTake() {
     if (!take) { toast(T("smp.needTake")); return; }
     if (recording()) { toast(T("smp.stopFirst")); return; }
-    const pcm = resample(region().pcm, take.rate, SMPC.RATE);
+    const r = region(), pcm = resample(r.pcm, take.rate, SMPC.RATE);
+    const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
+    const loop = loopMode ? { start: Math.round(r.ls * scale), end: Math.round(r.le * scale), root } : null;
     const btn = document.getElementById("smp-save");
     btn.disabled = true;
     try {
-      const where = await saveWav(pcm, take.name);
+      const where = await saveWav(pcm, take.name, loop);
       rememberTake(where);
       toast(T("smp.saved", { where: where.replace(/^.*[\\/]/, "") }));
     } catch (e) { toast(T("smp.saveFail", { err: e.message || e })); }
     btn.disabled = false;
+  }
+  // A multi-sample instrument: each zone is a snapshot of the current take at its ROOT. Upstream
+  // sorts the zones by root and splits the keyboard halfway between neighbours (sampleio.key_split).
+  function zoneBytes() { return zones.reduce((s, z) => s + Math.ceil(z.s.length / 2), 0); }
+  function addZone() {
+    if (!take) { toast(T("smp.needTake")); return; }
+    if (recording()) { toast(T("smp.stopFirst")); return; }
+    if (zones.length >= SMPC.MAX_ZONES) { toast(T("smp.zoneMax")); return; }
+    if (zones.some((z) => z.root === root)) { toast(T("smp.zoneDup", { note: noteName(root) })); return; }
+    const r = region();
+    const pcm = resample(r.pcm, take.rate, SMPC.RATE);
+    const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
+    const z = {
+      name: (document.getElementById("smp-name").value || take.name).replace(/\.wav$/i, ""),
+      root, s: toInt16(pcm), loop: loopMode > 0,
+      ls: loopMode ? Math.round(r.ls * scale) : 0,
+      le: loopMode ? Math.round(r.le * scale) : pcm.length - 1,
+      sec: pcm.length / SMPC.RATE
+    };
+    if (zoneBytes() + Math.ceil(z.s.length / 2) > SMPC.MAX_DATA) { toast(T("smp.zoneLong")); return; }
+    zones.push(z);
+    zones.sort((a, b) => a.root - b.root);
+    renderZones();
+    toast(T("smp.zoneAdded", { note: noteName(root) }));
+  }
+  function renderZones() {
+    const box = document.getElementById("smp-zones");
+    if (!box) return;
+    box.replaceChildren();
+    zones.forEach((z, i) => {
+      const row = document.createElement("div");
+      row.className = "take";
+      const d = document.createElement("div");
+      const b = document.createElement("b");
+      b.textContent = noteName(z.root) + " · " + z.name;
+      const sp = document.createElement("span");
+      sp.textContent = z.sec.toFixed(2) + " s" + (z.loop ? " · LOOP" : "");
+      d.append(b, sp);
+      const x = document.createElement("button");
+      x.className = "mini";
+      x.textContent = "×";
+      x.addEventListener("click", () => { zones.splice(i, 1); renderZones(); });
+      row.append(d, x);
+      box.appendChild(row);
+    });
+    const clr = document.getElementById("smp-clearzones");
+    if (clr) clr.disabled = !zones.length;
+    const info = document.getElementById("smp-zoneinfo");
+    if (info) info.textContent = zones.length ? T("smp.zones", { n: zones.length,
+      sec: zones.reduce((s, z) => s + z.sec, 0).toFixed(2) }) : "";
+    paintSlots();
   }
   async function upload() {
     if (!take) { toast(T("smp.needTake")); return; }
@@ -640,18 +755,21 @@
     // region() already moved the loop end before a crossfaded tail; carry the points over.
     const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
     const ls = Math.round(r.ls * scale), le = Math.round(r.le * scale);
+    const multi = zones.length > 0;
     let built;
-    try { built = buildSlot(name, [{ s: toInt16(pcm), root, loop: loopMode > 0, ls, le }]); }
+    try { built = buildSlot(name, multi ? zones : [{ s: toInt16(pcm), root, loop: loopMode > 0, ls, le }]); }
     catch (e) { toast(e.message); return; }
     const btn = document.getElementById("smp-upload");
     btn.disabled = true;
     try {
       await Sloop.smpUpload(link(), slot, built.hdr, built.data, (d, t) => { btn.textContent = Math.round(d / t * 100) + "%"; });
       toast(T("smp.written", { n: slot + 1 }));
-      let where = null;
-      try { where = await saveWav(pcm, take.name); }
-      catch (e) { if (window.ConsortFiles) toast(T("smp.writtenNoFile", { n: slot + 1 })); }
-      rememberTake(where);
+      if (!multi) {
+        let where = null;
+        try { where = await saveWav(pcm, take.name, loopMode ? { start: ls, end: le, root } : null); }
+        catch (e) { if (window.ConsortFiles) toast(T("smp.writtenNoFile", { n: slot + 1 })); }
+        rememberTake(where);
+      }
       refresh();
     } catch (e) { toast(T("smp.uploadFail", { err: e.message })); }
     btn.textContent = T("smp.send", { n: slot + 1 });
@@ -772,11 +890,14 @@
         if (b64) {
           const bin = atob(b64), u = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+          const meta = wavLoopInfo(u.buffer);
           const ac = new (window.AudioContext || window.webkitAudioContext)();
           const buf = await ac.decodeAudioData(u.buffer);
           ac.close().catch(() => {});
-          adopt({ id, name: t.name, rate: buf.sampleRate, pcm: monoPcm(buf),
-            trim: { a: 0, b: 1 }, root, loopMode: 0, fadeMs: 0, xfadeMs: 0, gainDb: 0,
+          const pcm = monoPcm(buf), lp = wavLoopState(meta, pcm, buf.sampleRate);
+          adopt({ id, name: t.name, rate: buf.sampleRate, pcm,
+            trim: { a: 0, b: 1 }, root, loopMode: lp ? lp.mode : 0,
+            loopPts: lp ? lp.pts : undefined, fadeMs: 0, xfadeMs: 0, gainDb: 0,
             label: t.name.replace(/\.wav$/i, "").toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) });
           toast(T("smp.loaded", { name: t.name }));
           return;
@@ -803,16 +924,20 @@
       const file = (inp.files || [])[0];
       if (!file) return;
       try {
+        const raw = await fileBytes(file), meta = wavLoopInfo(raw);   // before decode detaches it
         const ac = new (window.AudioContext || window.webkitAudioContext)();
-        const buf = await ac.decodeAudioData(await fileBytes(file));
+        const buf = await ac.decodeAudioData(raw);
         ac.close().catch(() => {});
         const limit = Math.round(MAX_SEC * buf.sampleRate);
         const long = buf.length > limit + Math.round(buf.sampleRate * 0.02);
         const pcm = monoPcm(buf, limit);      // the hardware cap applies to the source too
+        const lp = wavLoopState(meta, pcm, buf.sampleRate);
         const base = file.name.replace(/\.[^.]+$/, "");
         take = { id: takeId(), pcm, rate: buf.sampleRate,
           name: base.replace(/[\\/:*?"<>|]/g, "_") + ".wav" };
-        history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0; loopPts = { a: 0, b: 1 };
+        history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0;
+        loopMode = lp ? lp.mode : 0;
+        loopPts = lp ? lp.pts : { a: 0, b: 1 };
         document.getElementById("smp-name").value =
           base.toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) || "SAMPLE";
         rootLabel(); loopLabel(); gainLabel();
@@ -1031,6 +1156,7 @@
 
   function relabel() {
     paintSlots();
+    renderZones();
     renderTakes();
     rootLabel(); loopLabel(); gainLabel();
     if (take) setTrim(trim.a, trim.b); else drawHint();
@@ -1047,6 +1173,22 @@
   document.getElementById("smp-save").addEventListener("click", saveTake);
   document.getElementById("smp-upload").addEventListener("click", upload);
   document.getElementById("smp-import").addEventListener("click", importAudio);
+  document.getElementById("smp-addzone").addEventListener("click", addZone);
+  document.getElementById("smp-clearzones").addEventListener("click", () => { zones = []; renderZones(); });
+  async function useOnTrack(trackIndex) {
+    if (!link()) { toast(T("needConnect")); return; }
+    const nfo = link().info;
+    if (!nfo || nfo.protocol < 3) { toast(T("smp.noTracks")); return; }
+    try {
+      await Sloop.useSlot(link(), nfo, trackIndex, slot);
+      toast(trackIndex === 3 ? T("smp.assignedKit", { n: slot + 1 })
+        : T("smp.assigned", { n: slot + 1, track: trackIndex + 1 }));
+    } catch (e) { toast(T("smp.assignFail", { err: e.message || e })); }
+  }
+  ["smp-track1", "smp-track2", "smp-track3", "smp-drum"].forEach((id, k) => {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener("click", () => useOnTrack(k));
+  });
   document.getElementById("root-dec").addEventListener("click", () => { pushUndo(); root = Math.max(24, root - 1); rootLabel(); });
   document.getElementById("root-inc").addEventListener("click", () => { pushUndo(); root = Math.min(96, root + 1); rootLabel(); });
   document.getElementById("root-auto").addEventListener("click", autoRoot);
@@ -1130,7 +1272,10 @@
       take = { id: takeId(), pcm, rate, name: name || "TEST.wav" };
       history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0; loopPts = { a: 0, b: 1 };
       gainLabel(); loopLabel(); drawWave(pcm); setTrim(0, 1); autoTrim(); updateUndo();
-    }
+    },
+    _wav: wavBytes,
+    _wavLoop: wavLoopInfo,
+    _slot: buildSlot
   };
   initWaveSvg();
   rootLabel();
@@ -1140,4 +1285,5 @@
   drawHint();
   refresh();
   renderTakes();
+  renderZones();
 })();

@@ -64,15 +64,51 @@
       { id: 1, d: Uint8Array.from([2]) },
       { id: Sloop.THEME_ID, d: theme }
     ];
+    // Enough of a 2.7 device for the preview: INFO, DESC, TRACK and the two SETs the sampler uses
+    // for "Play on track" (engine SAMPLE + SET = USRn, or KIT = USRn on the drum track).
+    const ENGINES = ["ANALOG", "DIGITAL", "PHASE", "LOFI", "SAMPLE", "VOICE", "TRIO", "WHEEL", "GRAIN", "FM6", "PHYS", "NOISE"];
+    const SETS = ["PIANO", "BASS", "VIBES", "HORNS", "STRGS", "FLUTE", "SCRCH", "PERC", "USR1", "USR2", "USR3", "USR4"];
+    const KITS = Array.from({ length: 37 }, (_, i) => "KIT" + (i + 1));
+    KITS.push("USR1", "USR2", "USR3", "USR4", "USR3+4", "SYN1", "SYN2", "SYN3", "SYN4");
+    const v14 = (x) => { const u = x + 8192; return [u & 0x7F, (u >> 7) & 0x7F]; };
+    const str = (s) => [...Array.from(s, (ch) => ch.charCodeAt(0)), 0];
+    let selected = 0;
+    const tracks = [0, 1, 3, ENGINES.length].map((engine) => ({ engine, preset: 0, level: 100, mute: 0, armed: 0, pe0: 0 }));
     const t = {
       send(bytes) {
         const f = Sloop.unframe(bytes);
         if (!f) return;
         const reply = (args) => setTimeout(() => t.link && t.link.receive(Sloop.frame(f.cmd, args)), 25);
-        if (f.cmd === Sloop.CMD.INFO) reply([1, 0]);
-        else if (f.cmd === Sloop.CMD.PROJECT) reply([f.a[0], f.a[1], f.a[1] < 2 ? 1 : 0]);
+        if (f.cmd === Sloop.CMD.INFO) {
+          reply([...str("SLOOP 2.7"), ENGINES.length, 71, 45, 16, 63,
+            ...ENGINES.flatMap(str), 4, 5]);
+        } else if (f.cmd === Sloop.CMD.PROJECT) reply([f.a[0], f.a[1], f.a[1] < 2 ? 1 : 0]);
         else if (f.cmd === Sloop.CMD.LIVE) reply([f.a[0]]);
-        else if (f.cmd === Sloop.CMD.SET) reply([f.a[0], f.a[1], f.a[2], f.a[3]]);
+        else if (f.cmd === Sloop.CMD.SET) {
+          const scope = f.a[0], id = f.a[1], val = (f.a[2] | (f.a[3] << 7)) - 8192;
+          if (scope === 1 && id === 20) tracks[selected].engine = val;
+          else if (scope === 0 && id === 63) tracks[selected].pe0 = val;
+          reply([scope, id, f.a[2], f.a[3]]);
+        } else if (f.cmd === Sloop.CMD.DESC) {
+          const scope = f.a[0], id = f.a[1];
+          let label = "PARAM", names = [];
+          if (scope === 1 && id === 20) { label = "ENG"; names = ENGINES; }
+          else if (scope === 0 && id === 63) {
+            if (selected === 3) { label = "KIT"; names = KITS; }
+            else if (tracks[selected].engine === 4) { label = "SET"; names = SETS; }
+          }
+          reply([scope, id, names.length ? 8 : 0, ...v14(0), ...v14(Math.max(0, names.length - 1)), ...v14(0),
+            ...str(label), ...str(""), ...names.flatMap(str)]);
+        } else if (f.cmd === Sloop.CMD.TRACK) {
+          if (f.a.length) selected = f.a[0] & 3;
+          const a = [selected, tracks.length];
+          for (const tr of tracks) a.push(tr.engine, tr.preset, ...v14(tr.level), tr.mute, tr.armed);
+          reply(a);
+        } else if (f.cmd === Sloop.CMD.TRACK_PARAM) {
+          const trk = f.a[0] & 3, id = f.a[1];
+          if (f.a.length > 2 && id === 63) tracks[trk].pe0 = (f.a[2] | (f.a[3] << 7)) - 8192;
+          reply([trk, id, ...v14(id === 63 ? tracks[trk].pe0 : 0)]);
+        }
         else if (f.cmd === Sloop.CMD.SMP_INFO) {
           const a = [4, 80];
           for (let i = 0; i < 4; i++) a.push(0, 0, 0);

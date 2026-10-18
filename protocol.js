@@ -3,8 +3,8 @@
 (function (g) {
   "use strict";
   const HDR = [0x7D, 0x46, 0x4C];
-  const CMD = { INFO: 1, SET: 3, PROJECT: 9, SMP_BEGIN: 11, SMP_WRITE: 12, SMP_END: 13, SMP_ERASE: 14, SMP_INFO: 15,
-    BK_LIST: 34, BK_GET: 35, BK_PUT: 36, LIVE: 77 };
+  const CMD = { INFO: 1, SET: 3, DESC: 5, PROJECT: 9, SMP_BEGIN: 11, SMP_WRITE: 12, SMP_END: 13, SMP_ERASE: 14, SMP_INFO: 15,
+    TRACK: 27, TRACK_PARAM: 31, BK_LIST: 34, BK_GET: 35, BK_PUT: 36, LIVE: 77 };
   const SMP = { RATE: 22050, DATA_OFF: 512, HDR_LEN: 32 + 16 * 28, MAX_DATA: 0x14000 - 512, MAX_ZONES: 16 };
   const THEME_ID = 11;
   /* A song as one file (SLOOP 2.7, the editor's "Export this song"): the loop, sections A-D and the
@@ -107,7 +107,7 @@
   async function connect(transport) {
     const link = new Link(transport);
     transport.link = link;               /* the mock transport answers through it */
-    await link.request(CMD.INFO, [], { timeout: 500, retries: 3 });
+    link.info = parseInfo(await link.request(CMD.INFO, [], { timeout: 500, retries: 3 }));
     return link;
   }
 
@@ -135,14 +135,92 @@
      and (v5) the protocol version. P_COUNT is all a song/backup check needs (see bkDevFormat). */
   function parseInfo(a) {
     const r = new Reader(a);
-    const o = { version: r.s(), nengines: r.b(), pcount: r.b(), gcount: r.b(), nstep: r.b(), pe0: r.b(), protocol: 0 };
-    for (let i = 0; i < o.nengines && r.i < a.length; i++) r.s();
+    const o = { version: r.s(), nengines: r.b(), pcount: r.b(), gcount: r.b(), nstep: r.b(), pe0: r.b(),
+      protocol: 0, engines: [] };
+    for (let i = 0; i < o.nengines && r.i < a.length; i++) o.engines.push(r.s());
     if (r.i < a.length) r.b();                       /* NTRK */
     if (r.i < a.length) o.protocol = r.b();
     return o;
   }
   async function info(link) {
     return parseInfo(await link.request(CMD.INFO, [], { timeout: 1000, retries: 2 }));
+  }
+  /* DESC: scope, id -> fmt, range, label, unit, and (fmt 8) one name per enum value. */
+  function parseDesc(a) {
+    const r = new Reader(a), num = () => (r.b() | (r.b() << 7)) - 8192;
+    const o = { scope: r.b(), id: r.b(), fmt: r.b() };
+    o.min = num(); o.max = num(); o.def = num();
+    o.label = r.s(); o.unit = r.s(); o.names = [];
+    if (o.fmt === 8) while (r.i < a.length) o.names.push(r.s());
+    return o;
+  }
+  async function desc(link, scope, id) {
+    return parseDesc(await link.request(CMD.DESC, [scope & 0x7F, id & 0x7F], { timeout: 800, retries: 0 }));
+  }
+  /* TRACK (v3): no args queries, an index (0..2 synth, 3 drums) selects. Either reply lists every
+     track: engine, preset, level, mute, armed. */
+  function parseTrack(a) {
+    const r = new Reader(a), sel = r.b(), n = r.b(), tracks = [];
+    for (let i = 0; i < n; i++) {
+      const engine = r.b(), preset = r.b(), level = (r.b() | (r.b() << 7)) - 8192;
+      tracks.push({ engine, preset, level, mute: r.b(), armed: r.b() });
+    }
+    return { selected: sel, tracks };
+  }
+  async function track(link, index) {
+    return parseTrack(await link.request(CMD.TRACK, index == null ? [] : [index & 3], { timeout: 800, retries: 0 }));
+  }
+  /* TRACK_PARAM (v4): one P_* of any track, without moving the selection. */
+  async function trackParam(link, trackIndex, id, value) {
+    const args = [trackIndex & 3, id & 0x7F];
+    if (value != null) args.push(...v14(value));
+    const r = new Reader(await link.request(CMD.TRACK_PARAM, args, { timeout: 800, retries: 0 }));
+    r.b(); r.b();
+    return (r.b() | (r.b() << 7)) - 8192;
+  }
+  /* G_ENGSEL is global id 20 on 2.6/2.7 and its DESC label is "ENG"; check that, then scan. */
+  async function findGlobal(link, nfo, label) {
+    if (!nfo || !nfo.gcount) return -1;
+    if (20 < nfo.gcount) {
+      try { if ((await desc(link, 1, 20)).label === label) return 20; } catch (e) { /* scan below */ }
+    }
+    for (let id = 0; id < nfo.gcount; id++) {
+      if (id === 20) continue;
+      try { if ((await desc(link, 1, id)).label === label) return id; } catch (e) { /* not this one */ }
+    }
+    return -1;
+  }
+  /* Put a user slot on a track, as the upstream editor's "Play this slot on track 1/2/3" and
+     "Use on the drum track": a synth track wants engine SAMPLE + SET = USRn, the drum track KIT =
+     USRn. The machine has one selected track, so the selection moves and is restored. */
+  async function useSlot(link, nfo, trackIndex, slotIndex) {
+    nfo = nfo || link.info;
+    if (!nfo || nfo.protocol < 3 || !nfo.pe0) throw new Error("tracks need SLOOP 2.0");
+    const cur = await track(link);
+    const want = Math.max(0, Math.min(3, trackIndex | 0));
+    const name = "USR" + (slotIndex + 1);
+    let sel = cur.selected;
+    const move = async (i) => { if (i !== sel) { await track(link, i); sel = i; } };
+    await move(want);
+    try {
+      const isDrum = want === 3;
+      if (!isDrum) {
+        const eng = nfo.engines && nfo.engines.indexOf("SAMPLE") >= 0 ? nfo.engines.indexOf("SAMPLE") : 4;
+        if (!cur.tracks[want] || cur.tracks[want].engine !== eng) {
+          const gid = await findGlobal(link, nfo, "ENG");
+          if (gid < 0) throw new Error("no ENG parameter");
+          await setParam(link, 1, gid, eng);          // SAMPLE, with its defaults
+        }
+      }
+      const d = await desc(link, 0, nfo.pe0);         // SET, or KIT on the drum track
+      const i = d.names.indexOf(name);
+      if (i < 0) throw new Error(name + " is not in " + d.label);
+      if (nfo.protocol >= 4) await trackParam(link, want, nfo.pe0, i);
+      else await setParam(link, 0, nfo.pe0, i);
+      return { track: want, value: i, kit: isDrum };
+    } finally {
+      await move(cur.selected);
+    }
   }
   /* a project object starts "FUN4" .. "FUN6" (low byte first); 0 when it is not a project */
   const bkProjFormat = (d) => (d && d.length >= 4 && d[1] === 0x4E && d[2] === 0x55 && d[3] === 0x46 ? d[0] - 0x30 : 0);
@@ -498,7 +576,8 @@
   g.Sloop = {
     CMD, THEME_ID, SONGF, frame, unframe, pack7, unpack7, u35enc, crc32, Link, connect,
     parseInfo, info, bkProjFormat, bkDevFormat, bkFwAtLeast,
-    readObject, writeObject, project, live, backupCapture, backupRestore, setParam, smpInfo, smpUpload, smpErase, SMP,
+    readObject, writeObject, project, live, backupCapture, backupRestore, setParam, desc, track, trackParam, useSlot,
+    smpInfo, smpUpload, smpErase, SMP,
     songObjects, songCapture, songLoad, songVariant, songPlaylist,
     readTheme: (link) => readObject(link, THEME_ID),
     writeTheme: (link, bytes) => writeObject(link, THEME_ID, bytes),
