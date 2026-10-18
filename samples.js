@@ -55,7 +55,8 @@
     let len = 0;
     for (const z of zones) {
       const data = imaEncode(z.s);
-      zs.push({ off: len, n: z.s.length, root: z.root, looped: z.loop ? 2 : 0 });
+      const le = z.le == null ? z.s.length - 1 : Math.max(0, Math.min(z.s.length - 1, z.le | 0));
+      zs.push({ off: len, n: z.s.length, le, root: z.root, looped: z.loop ? 2 : 0 });
       parts.push(data);
       len += data.length;
     }
@@ -74,7 +75,7 @@
     const rate = Math.round(SMPC.RATE / 44100 * 65536);
     zs.forEach((z, j) => {
       const b = 32 + j * 28;
-      [z.off, z.n, 0, z.n - 1, rate].forEach((x, k) => v.setUint32(b + k * 4, x >>> 0, true));
+      [z.off, z.n, 0, z.le, rate].forEach((x, k) => v.setUint32(b + k * 4, x >>> 0, true));
       v.setInt16(b + 20, z.root * 16, true);
       v.setInt16(b + 22, 0, true);
       hdr[b + 24] = 0;
@@ -255,8 +256,10 @@
   function paintSlots() {
     const box = document.getElementById("smp-slots");
     if (!box) return;
+    const n = lastInfo && lastInfo.nslots ? Math.max(1, Math.min(16, lastInfo.nslots)) : 4;
+    if (slot >= n) slot = n - 1;
     box.replaceChildren();
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < n; k++) {
       const sl = lastInfo && lastInfo.slots[k];
       const c = document.createElement("button");
       c.className = "chip" + (k === slot ? " on" : "");
@@ -297,10 +300,16 @@
   // What will actually be heard/sent: the trim, with gain, fade and (in LOOP) a crossfaded seam.
   // Nothing here mutates the take, so trim/fade/gain can be changed and undone freely.
   function region() {
-    const x = take.pcm, i0 = idxAt(trim.a), i1 = Math.max(i0 + 1, Math.round(trim.b * x.length));
+    const x = take.pcm;
+    let i0 = idxAt(trim.a), i1 = Math.max(i0 + 1, Math.round(trim.b * x.length));
+    if (loopMode) {                            // the FM-1 wraps at these two samples: cut on zero crossings
+      i0 = nearestZero(i0);
+      i1 = Math.max(i0 + 2, Math.min(x.length, nearestZero(i1 - 1) + 1));
+    }
     const out = new Float32Array(i1 - i0), g = Math.pow(10, gainDb / 20);
     for (let i = i0; i < i1; i++) out[i - i0] = x[i] * g;
-    const nf = Math.min(Math.round(take.rate * fadeMs / 1000), out.length >> 2);
+    // A one-shot fades in and out; a loop must not: the fade would dip the level on every wrap.
+    const nf = loopMode ? 0 : Math.min(Math.round(take.rate * fadeMs / 1000), out.length >> 2);
     if (nf > 0) {
       for (let i = 0; i < nf; i++) {
         const w = i / nf;
@@ -309,11 +318,12 @@
       }
     }
     if (loopMode && xfadeMs > 0) {
+      // Fold the tail onto the head, equal-power: the loop wraps from the sample before the tail
+      // (see upload) to out[0], where the tail now continues; by out[n-1] the head has resumed.
       const n = Math.min(Math.round(take.rate * xfadeMs / 1000), out.length >> 2);
       if (n > 1) for (let i = 0; i < n; i++) {
-        // Equal-power (cos/sin), so the seam does not dip in level: the tail gives way to the head.
         const th = (i / (n - 1)) * Math.PI / 2;
-        out[out.length - n + i] = out[out.length - n + i] * Math.cos(th) + out[i] * Math.sin(th);
+        out[i] = out[i] * Math.sin(th) + out[out.length - n + i] * Math.cos(th);
       }
     }
     return out;
@@ -364,6 +374,10 @@
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.loop = !!loopMode;                    // in LOOP the audition loops until pressed again
+    if (loopMode) {                           // wrap where the FM-1 wraps: before the folded tail
+      const nxf = xfadeMs > 0 ? Math.min(Math.round(take.rate * xfadeMs / 1000), pcm.length >> 2) : 0;
+      src.loopEnd = (pcm.length - nxf) / take.rate;
+    }
     src.connect(ac.destination);
     const btn = document.getElementById("smp-play");
     if (btn) btn.classList.add("on");
@@ -594,8 +608,11 @@
     const pcm = resample(region(), take.rate, SMPC.RATE);
     const name = (document.getElementById("smp-name").value || take.name.replace(/\.wav$/i, "")).toUpperCase();
     document.getElementById("smp-name").value = name;
+    // A crossfaded loop ends before the folded tail; the release (LOOP+TAIL) plays that tail out.
+    const nxf = loopMode && xfadeMs > 0 ? Math.min(Math.round(SMPC.RATE * xfadeMs / 1000), pcm.length >> 2) : 0;
+    const le = loopMode && nxf > 1 ? pcm.length - nxf - 1 : pcm.length - 1;
     let built;
-    try { built = buildSlot(name, [{ s: toInt16(pcm), root, loop: loopMode }]); }
+    try { built = buildSlot(name, [{ s: toInt16(pcm), root, loop: loopMode, le }]); }
     catch (e) { toast(e.message); return; }
     const btn = document.getElementById("smp-upload");
     btn.disabled = true;
