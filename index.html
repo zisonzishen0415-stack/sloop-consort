@@ -38,6 +38,7 @@
     <div class="chips" id="smp-slots"></div>
     <div class="row" style="margin:-4px 0 10px;gap:8px">
       <button class="mini" id="smp-erase" data-i18n="smp.erase">Erase slot</button>
+      <button class="mini" id="smp-import" data-i18n="smp.import">Import audio</button>
       <span class="hint" id="smp-slotinfo">-</span>
     </div>
 
@@ -57,15 +58,31 @@
           <div class="meter" style="margin-top:5px"><i id="smp-meter"></i></div>
         </div>
       </div>
+      <div class="trimrow">
+        <div class="param"><span>START</span>
+          <button class="mini" id="start-dec">−</button><b id="smp-start">—</b><button class="mini" id="start-inc">+</button>
+        </div>
+        <div class="param"><span>END</span>
+          <button class="mini" id="end-dec">−</button><b id="smp-end">—</b><button class="mini" id="end-inc">+</button>
+        </div>
+      </div>
       <div class="acts">
         <button id="smp-play" data-i18n="smp.audition">Audition</button>
         <button id="smp-trim" data-i18n="smp.trim">Auto-trim</button>
+        <button id="smp-reverse" data-i18n="smp.reverse">Reverse</button>
+        <button id="smp-undo" data-i18n="smp.undo">Undo</button>
         <button id="smp-norm" data-i18n="smp.norm">Normalize</button>
-        <button id="smp-fade" data-i18n="smp.fade">Fade</button>
+        <button id="smp-fade" data-i18n="smp.fade">Fade in/out</button>
+        <button id="smp-clean" data-i18n="smp.clean">Clean</button>
+        <button id="smp-save" data-i18n="smp.save">Save</button>
       </div>
       <div class="params">
         <div class="param"><span>ROOT</span>
           <button class="mini" id="root-dec">−</button><b id="smp-root">C4</b><button class="mini" id="root-inc">+</button>
+          <button class="mini" id="root-auto">AUTO</button>
+        </div>
+        <div class="param"><span>GAIN</span>
+          <button class="mini" id="gain-dec">−</button><b id="smp-gain">0 dB</b><button class="mini" id="gain-inc">+</button>
         </div>
         <div class="param"><span>LOOP</span><button class="mini" id="smp-loopmode">ONE SHOT</button></div>
       </div>
@@ -81,6 +98,7 @@
       <h2 data-i18n="smp.recent">Recent takes</h2>
       <div id="smp-takes"></div>
       <p class="hint" id="smp-takes-empty" data-i18n="smp.none">No takes yet.</p>
+      <p class="hint" id="smp-takes-hint" data-i18n="smp.tapLoad" style="display:none">Tap a take to load it</p>
     </div>
   </section>
 

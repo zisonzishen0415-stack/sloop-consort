@@ -73,8 +73,11 @@ button.wide{width:100%}
 .acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
 .acts button{min-height:44px;font-size:13px}
 .acts button.on{background:var(--acc);color:var(--ink)}
+.acts button:disabled{opacity:.35}
+.trimrow{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
+.trimrow .param b{min-width:3.6em}
 
-.take{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.take{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);cursor:pointer}
 .take:first-of-type{border-top:0}
 .take>div{min-width:0}
 .take b{display:block;font-weight:400;font-size:14px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -151,8 +154,9 @@ input[type=range]::-webkit-slider-runnable-track{height:4px;background:var(--s3)
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:6px;height:14px;margin-top:-5px;background:var(--fg);border:0;border-radius:0}
 
 .consort-back{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:30;display:flex;align-items:flex-end;justify-content:center;padding:12px}
-.consort-sheet{width:100%;max-width:420px;background:var(--s1);border:1px solid var(--line);display:flex;flex-direction:column;gap:6px;padding:8px}
+.consort-sheet{width:100%;max-width:420px;max-height:calc(100dvh - 24px);overflow:auto;background:var(--s1);border:1px solid var(--line);display:flex;flex-direction:column;gap:6px;padding:8px}
 .consort-sheet button{min-height:46px;background:var(--s2)}
+.consort-sheet button.on{background:var(--acc);color:var(--ink)}
 .consort-sheet button.danger{color:var(--red)}
 
 .pill.off{color:var(--dim);border-color:var(--dim)}

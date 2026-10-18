@@ -17,6 +17,7 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
+import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.widget.Toast;
 
@@ -115,6 +116,31 @@ public final class FilesBridge {
                 int n;
                 while ((n = input.read(buf)) > 0) out.write(buf, 0, n);
                 return new String(out.toByteArray(), StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The whole file as base64, so the sampler can decode a saved WAV take back into the editor. */
+    @JavascriptInterface
+    public String readBase64(String name, String path) {
+        try {
+            InputStream in;
+            if (Build.VERSION.SDK_INT < 29) {
+                in = new FileInputStream(new File(activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), safeName(name)));
+            } else {
+                Uri uri = uriFor(name, path);
+                if (uri == null) return null;
+                in = activity.getContentResolver().openInputStream(uri);
+            }
+            if (in == null) return null;
+            try (InputStream input = in) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = input.read(buf)) > 0) out.write(buf, 0, n);
+                return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
             }
         } catch (Exception e) {
             return null;
