@@ -1,12 +1,19 @@
-/* Consort — the sampler: record (7 s), trim, auto-trim / normalize / fade, root note and loop,
+/* Consort — the sampler: record (slot capacity), trim, auto-trim / normalize / fade, root note and loop,
    then encode (IMA ADPCM, 22050 mono) and send to USR1–4 through SMP. The classic order: listen, cut,
    set the root and the loop, name it, send it. */
 (function () {
   "use strict";
   const App = window.ConsortApp || {};
   const SMPC = Sloop.SMP;
-  const MAX_SEC = 7;
+  // The slot's own capacity: 81408 B of 4-bit ADPCM, about 7.38 s at 22050 Hz (sampleio.SLOT_MAX_DATA).
+  const MAX_SEC = SMPC.MAX_DATA * 2 / SMPC.RATE;
   const T = (key, vars) => (window.ConsortI18n ? ConsortI18n.t(key, vars) : key);
+  // The slot's 8-byte name: uppercase printable ASCII, as sampleio.user_slot stores it. Punctuation
+  // is part of the name and must survive; only bytes the machine cannot report are dropped.
+  function cleanName(s) {
+    return String(s == null ? "" : s).toUpperCase().replace(/[^\x20-\x7E]/g, "").slice(0, 8);
+  }
+  function slotName(s) { return cleanName(s) || "SAMPLE"; }
   const IMA_STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88,
     97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658,
     724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660,
@@ -14,7 +21,7 @@
     18500, 20350, 22385, 24623, 27086, 29794, 32767];
   const IMA_IDX = [-1, -1, -1, -1, 2, 4, 6, 8];
   const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-  const MIN_TRIM = 0.005;                    // ~35 ms at 7 s: short enough for a loop, long enough to grab
+  const MIN_TRIM = 0.005;                    // ~35 ms at 7.4 s: short enough for a loop, long enough to grab
   let slot = 0, take = null, trim = { a: 0, b: 1 }, root = 60, loopMode = 0;
   let loopPts = { a: 0, b: 1 };              // loop region within the trim, for LOOP+TAIL
   let fadeMs = 15, xfadeMs = 0, gainDb = 0;
@@ -92,7 +99,7 @@
     v.setUint32(0, 0x504D5346, true);
     v.setUint16(4, 1, true);
     hdr[6] = zs.length;
-    const nm = String(name).toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) || "SAMPLE";
+    const nm = slotName(name);
     for (let i = 0; i < nm.length; i++) hdr[8 + i] = nm.charCodeAt(i);
     v.setUint32(16, len, true);
     v.setUint32(20, Sloop.crc32(data), true);
@@ -118,15 +125,39 @@
     }
     return out;
   }
+  // sampleio.resample: a moving average over the decimation ratio (crude anti-alias), then linear
+  // interpolation. Matching it keeps the same source band-limited the same way as upstream.
   function resample(x, from, to) {
     if (from === to) return x;
-    const n = Math.max(1, Math.round(x.length * to / from)), out = new Float32Array(n), r = from / to;
-    for (let i = 0; i < n; i++) {
-      const p = i * r, i0 = Math.floor(p), f = p - i0;
-      const a = x[Math.min(x.length - 1, i0)], b = x[Math.min(x.length - 1, i0 + 1)];
-      out[i] = a + (b - a) * f;
+    let v = x;
+    if (from > to) {
+      const k = Math.max(1, Math.round(from / to));
+      if (k === 2) {
+        const o = new Float32Array(v.length);
+        for (let i = 0; i < v.length - 1; i++) o[i] = (v[i] + v[i + 1]) / 2;
+        if (v.length) o[v.length - 1] = v[v.length - 1] / 2;
+        v = o;
+      } else if (k > 1) {
+        const o = new Float32Array(Math.max(0, v.length - k + 1));
+        for (let i = 0; i < o.length; i++) {
+          let s = 0;
+          for (let j = 0; j < k; j++) s += v[i + j];
+          o[i] = s / k;
+        }
+        v = o;
+      }
     }
-    return out;
+    const step = from / to, last = v.length - 1, out = [];
+    for (let p = 0; p < last; p += step) {
+      const i = Math.floor(p), f = p - i;
+      out.push(v[i] * (1 - f) + v[i + 1] * f);
+    }
+    return new Float32Array(out);
+  }
+  // Resample for the slot and never hand the builder more than its capacity (some ratios round up).
+  function slotPcm(x, rate) {
+    const out = resample(x, rate, SMPC.RATE), max = SMPC.MAX_DATA * 2;
+    return out.length > max ? out.subarray(0, max) : out;
   }
   function toInt16(x) {
     const o = new Int16Array(x.length);
@@ -179,10 +210,14 @@
   function wavLoopState(meta, pcm, decodedRate) {
     if (!meta || meta.start == null || !(meta.end > meta.start)) return null;
     const k = meta.rate && decodedRate ? decodedRate / meta.rate : 1;
-    const a = Math.round(meta.start * k), b = Math.round((meta.end + 1) * k);   // end is inclusive
-    if (a < 0 || b > pcm.length + 1 || b - a < 2) return null;
-    return { mode: b >= pcm.length - 1 ? 1 : 2,
-      pts: { a: Math.max(0, Math.min(1, a / pcm.length)), b: Math.max(0, Math.min(1, b / pcm.length)) } };
+    const a = Math.round(meta.start * k);
+    let b = Math.round((meta.end + 1) * k);   // end is inclusive
+    // The editor imports a smpl loop as LOOP+TAIL regardless of where it ends (GUIDE.md); keeping
+    // mode 2 also keeps the start when the source was cut to the slot's length.
+    if (a < 0 || a >= pcm.length) return null;
+    b = Math.min(pcm.length, b);
+    if (b - a < 2) return null;
+    return { mode: 2, pts: { a: a / pcm.length, b: b / pcm.length } };
   }
   function clock(sec) {
     const m = Math.floor(sec / 60), s = sec - m * 60;
@@ -243,7 +278,7 @@
     r.setAttribute("width", ((1 - trim.b) * 400).toFixed(1));
   }
   // While recording, MediaRecorder only produces an encoded stream, so the live picture comes from
-  // the AnalyserNode: one peak per 1/240 of the 7 s timeline, drawn left to right.
+  // the AnalyserNode: one peak per 1/240 of the slot's timeline, drawn left to right.
   function drawLive() {
     initWaveSvg();
     const path = document.getElementById("smp-wpath");
@@ -681,7 +716,7 @@
   async function saveTake() {
     if (!take) { toast(T("smp.needTake")); return; }
     if (recording()) { toast(T("smp.stopFirst")); return; }
-    const r = region(), pcm = resample(r.pcm, take.rate, SMPC.RATE);
+    const r = region(), pcm = slotPcm(r.pcm, take.rate);
     const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
     const loop = loopMode ? { start: Math.round(r.ls * scale), end: Math.round(r.le * scale), root } : null;
     const btn = document.getElementById("smp-save");
@@ -702,7 +737,7 @@
     if (zones.length >= SMPC.MAX_ZONES) { toast(T("smp.zoneMax")); return; }
     if (zones.some((z) => z.root === root)) { toast(T("smp.zoneDup", { note: noteName(root) })); return; }
     const r = region();
-    const pcm = resample(r.pcm, take.rate, SMPC.RATE);
+    const pcm = slotPcm(r.pcm, take.rate);
     const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
     const z = {
       name: (document.getElementById("smp-name").value || take.name).replace(/\.wav$/i, ""),
@@ -749,8 +784,8 @@
     if (recording()) { toast(T("smp.stopFirst")); return; }
     if (!link()) { toast(T("needConnect")); return; }
     const r = region();
-    const pcm = resample(r.pcm, take.rate, SMPC.RATE);
-    const name = (document.getElementById("smp-name").value || take.name.replace(/\.wav$/i, "")).toUpperCase();
+    const pcm = slotPcm(r.pcm, take.rate);
+    const name = slotName(document.getElementById("smp-name").value || take.name.replace(/\.wav$/i, ""));
     document.getElementById("smp-name").value = name;
     // region() already moved the loop end before a crossfaded tail; carry the points over.
     const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
@@ -858,7 +893,7 @@
       ? { a: Math.max(0, Math.min(1, st.trim.a)), b: Math.max(0, Math.min(1, st.trim.b)) }
       : { a: 0, b: 1 };
     if (trim.b <= trim.a) trim = { a: 0, b: 1 };
-    root = Math.max(24, Math.min(96, st.root || 60));
+    root = Math.max(0, Math.min(127, st.root == null ? 60 : st.root));
     loopMode = Math.max(0, Math.min(2, st.loopMode | 0));
     if (st.loopPts && isFinite(st.loopPts.a) && isFinite(st.loopPts.b)) {
       const a = Math.max(0, Math.min(1, st.loopPts.a)), b = Math.max(0, Math.min(1, st.loopPts.b));
@@ -868,8 +903,7 @@
     xfadeMs = st.xfadeMs == null ? 0 : Math.max(0, st.xfadeMs);
     gainDb = Math.max(-24, Math.min(24, st.gainDb || 0));
     history = [];
-    document.getElementById("smp-name").value = (st.label ||
-      take.name.replace(/\.wav$/i, "").toUpperCase().replace(/[^A-Z0-9 _-]/g, "")).slice(0, 8);
+    document.getElementById("smp-name").value = cleanName(st.label || take.name.replace(/\.wav$/i, ""));
     rootLabel(); loopLabel(); gainLabel();
     drawWave(take.pcm); setTrim(trim.a, trim.b); updateUndo();
   }
@@ -928,9 +962,9 @@
         const ac = new (window.AudioContext || window.webkitAudioContext)();
         const buf = await ac.decodeAudioData(raw);
         ac.close().catch(() => {});
-        const limit = Math.round(MAX_SEC * buf.sampleRate);
+        const limit = Math.floor(SMPC.MAX_DATA * 2 * buf.sampleRate / SMPC.RATE);
         const long = buf.length > limit + Math.round(buf.sampleRate * 0.02);
-        const pcm = monoPcm(buf, limit);      // the hardware cap applies to the source too
+        const pcm = monoPcm(buf, limit);      // the slot's capacity applies to the source too
         const lp = wavLoopState(meta, pcm, buf.sampleRate);
         const base = file.name.replace(/\.[^.]+$/, "");
         take = { id: takeId(), pcm, rate: buf.sampleRate,
@@ -938,8 +972,7 @@
         history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0;
         loopMode = lp ? lp.mode : 0;
         loopPts = lp ? lp.pts : { a: 0, b: 1 };
-        document.getElementById("smp-name").value =
-          base.toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) || "SAMPLE";
+        document.getElementById("smp-name").value = slotName(base);
         rootLabel(); loopLabel(); gainLabel();
         drawWave(pcm); setTrim(0, 1); updateUndo();
         toast(T("smp.imported", { name: base, sec: (pcm.length / buf.sampleRate).toFixed(1) }));
@@ -1088,7 +1121,7 @@
           const ac = new (window.AudioContext || window.webkitAudioContext)();
           const buf = await ac.decodeAudioData(await blob.arrayBuffer());
           ac.close().catch(() => {});
-          const pcm = monoPcm(buf);
+          const pcm = monoPcm(buf, Math.floor(SMPC.MAX_DATA * 2 * buf.sampleRate / SMPC.RATE));
           const d = new Date(), p = (x) => (x < 10 ? "0" : "") + x;
           take = { id: takeId(), pcm, rate: buf.sampleRate,
             name: "REC-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + ".wav" };
@@ -1189,8 +1222,8 @@
     const b = document.getElementById(id);
     if (b) b.addEventListener("click", () => useOnTrack(k));
   });
-  document.getElementById("root-dec").addEventListener("click", () => { pushUndo(); root = Math.max(24, root - 1); rootLabel(); });
-  document.getElementById("root-inc").addEventListener("click", () => { pushUndo(); root = Math.min(96, root + 1); rootLabel(); });
+  document.getElementById("root-dec").addEventListener("click", () => { pushUndo(); root = Math.max(0, root - 1); rootLabel(); });
+  document.getElementById("root-inc").addEventListener("click", () => { pushUndo(); root = Math.min(127, root + 1); rootLabel(); });
   document.getElementById("root-auto").addEventListener("click", autoRoot);
   document.getElementById("root-tune").addEventListener("click", tuneToRoot);
   document.getElementById("gain-dec").addEventListener("click", () => { pushUndo(); gainDb = Math.max(-24, gainDb - 1); gainLabel(); });
@@ -1215,7 +1248,7 @@
   document.getElementById("loop-end-dec").addEventListener("click", () => nudgeLoop(1, -1));
   document.getElementById("loop-end-inc").addEventListener("click", () => nudgeLoop(1, 1));
   document.getElementById("smp-name").addEventListener("input", (e) => {
-    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8);
+    e.target.value = cleanName(e.target.value);
   });
   document.getElementById("smp-erase").addEventListener("click", async () => {
     if (!link()) { toast(T("needConnect")); return; }
@@ -1275,6 +1308,8 @@
     },
     _wav: wavBytes,
     _wavLoop: wavLoopInfo,
+    _wavState: wavLoopState,
+    _resample: resample,
     _slot: buildSlot
   };
   initWaveSvg();
