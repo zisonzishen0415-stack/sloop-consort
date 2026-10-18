@@ -491,24 +491,24 @@
     setTrim(trim.a, trim.b);
     toast(T("smp.cleaned"));
   }
-  // Autocorrelation over the first 250 ms of the selection; only a confident, in-range pitch is used.
-  function autoRoot() {
-    if (!take) { toast(T("smp.needTake")); return; }
-    if (recording()) { toast(T("smp.stopFirst")); return; }
+  // Autocorrelation over the first 250 ms of the selection. Returns null unless the periodicity is
+  // confident; parabolic interpolation keeps the frequency accurate enough for TUNE.
+  function detectPitch() {
+    if (!take) return null;
     const x = take.pcm, rate = take.rate;
     const i0 = idxAt(trim.a), i1 = Math.max(i0 + 1, Math.round(trim.b * x.length));
     const st = i0 + Math.floor((i1 - i0) * 0.1);
     const n = Math.min(i1 - st, Math.round(rate * 0.25));
-    if (n < 256) { toast(T("smp.rootNone")); return; }
+    if (n < 256) return null;
     let mean = 0;
     for (let i = 0; i < n; i++) mean += x[st + i];
     mean /= n;
     const y = new Float32Array(n);
     let energy = 0;
     for (let i = 0; i < n; i++) { const v = x[st + i] - mean; y[i] = v; energy += v * v; }
-    if (Math.sqrt(energy / n) < 0.003) { toast(T("smp.rootNone")); return; }
+    if (Math.sqrt(energy / n) < 0.003) return null;
     const minLag = Math.max(2, Math.floor(rate / 1000)), maxLag = Math.min(n - 2, Math.floor(rate / 55));
-    if (maxLag <= minLag) { toast(T("smp.rootNone")); return; }
+    if (maxLag <= minLag) return null;
     const r = new Float32Array(maxLag + 2);
     let best = 0, bestLag = 0;
     for (let lag = minLag; lag <= maxLag; lag++) {
@@ -521,7 +521,7 @@
       r[lag] = v;
       if (v > best) { best = v; bestLag = lag; }
     }
-    if (best < 0.55 || !bestLag) { toast(T("smp.rootNone")); return; }
+    if (best < 0.55 || !bestLag) return null;
     let lag = bestLag;                        // prefer the first strong peak: the fundamental, not the octave
     for (let k = minLag; k <= maxLag; k++) {
       if (r[k] >= best * 0.9 && r[k] > r[k - 1] && r[k] >= r[k + 1]) { lag = k; break; }
@@ -531,11 +531,41 @@
     const shift = Math.abs(den) > 1e-9 ? 0.5 * (rl - rr) / den : 0;
     const f = rate / (lag + shift);
     const midi = Math.round(69 + 12 * Math.log2(f / 440));
-    if (!isFinite(midi) || midi < 24 || midi > 96) { toast(T("smp.rootNone")); return; }
+    if (!isFinite(midi) || midi < 24 || midi > 96) return null;
+    return { f, midi };
+  }
+  function autoRoot() {
+    if (!take) { toast(T("smp.needTake")); return; }
+    if (recording()) { toast(T("smp.stopFirst")); return; }
+    const p = detectPitch();
+    if (!p) { toast(T("smp.rootNone")); return; }
     pushUndo();
-    root = midi;
+    root = p.midi;
     rootLabel();
     toast(T("smp.rootFound", { note: noteName(root) }));
+  }
+  // Optional and destructive: move the sample's own pitch onto ROOT by resampling it. AUTO leaves
+  // the audio alone and only labels it; TUNE makes the root key sound at the root's pitch.
+  function tuneToRoot() {
+    if (!take) { toast(T("smp.needTake")); return; }
+    if (recording()) { toast(T("smp.stopFirst")); return; }
+    const p = detectPitch();
+    if (!p) { toast(T("smp.rootNone")); return; }
+    const target = 440 * Math.pow(2, (root - 69) / 12);
+    const ratio = target / p.f;
+    if (!isFinite(ratio) || ratio < 0.25 || ratio > 4) { toast(T("smp.tuneRange")); return; }
+    if (Math.abs(1200 * Math.log2(ratio)) < 0.5) { toast(T("smp.inTune", { note: noteName(root) })); return; }
+    const x = take.pcm, len = Math.round(x.length / ratio);
+    if ((trim.b - trim.a) * len / take.rate > MAX_SEC) {
+      toast(T("smp.tuneLong", { sec: MAX_SEC.toFixed(1) })); return;
+    }
+    stopPreview();
+    const out = resample(x, take.rate * ratio, take.rate);
+    pushUndo();
+    take.pcm = out;
+    drawWave(out);
+    setTrim(trim.a, trim.b);
+    toast(T("smp.tuned", { note: noteName(root) }));
   }
   async function saveWav(pcm, name) {
     const r = await fetch("/save?name=" + encodeURIComponent(name) + "&type=audio/wav",
@@ -969,6 +999,7 @@
   document.getElementById("root-dec").addEventListener("click", () => { pushUndo(); root = Math.max(24, root - 1); rootLabel(); });
   document.getElementById("root-inc").addEventListener("click", () => { pushUndo(); root = Math.min(96, root + 1); rootLabel(); });
   document.getElementById("root-auto").addEventListener("click", autoRoot);
+  document.getElementById("root-tune").addEventListener("click", tuneToRoot);
   document.getElementById("gain-dec").addEventListener("click", () => { pushUndo(); gainDb = Math.max(-24, gainDb - 1); gainLabel(); });
   document.getElementById("gain-inc").addEventListener("click", () => { pushUndo(); gainDb = Math.min(24, gainDb + 1); gainLabel(); });
   document.getElementById("smp-loopmode").addEventListener("click", () => {
