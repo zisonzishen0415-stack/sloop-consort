@@ -311,8 +311,9 @@
     if (loopMode && xfadeMs > 0) {
       const n = Math.min(Math.round(take.rate * xfadeMs / 1000), out.length >> 2);
       if (n > 1) for (let i = 0; i < n; i++) {
-        const w = Math.sqrt(i / (n - 1));   // equal-power: the tail becomes the head, so the wrap is smooth
-        out[out.length - n + i] = out[out.length - n + i] * (1 - w) + out[i] * w;
+        // Equal-power (cos/sin), so the seam does not dip in level: the tail gives way to the head.
+        const th = (i / (n - 1)) * Math.PI / 2;
+        out[out.length - n + i] = out[out.length - n + i] * Math.cos(th) + out[i] * Math.sin(th);
       }
     }
     return out;

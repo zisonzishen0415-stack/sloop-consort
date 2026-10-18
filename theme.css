@@ -71,7 +71,8 @@ button.wide{width:100%}
 .meter{height:6px;background:var(--s3);overflow:hidden;flex:1}
 .meter i{display:block;height:100%;width:0;background:var(--t2)}
 .acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
-.acts button{min-height:44px;font-size:13px}
+/* Long labels ("Normalize", "Fade in/out" and their translations) wrap instead of overflowing. */
+.acts button{min-height:44px;font-size:12px;line-height:14px;padding:4px 6px;white-space:normal}
 .acts button.on{background:var(--acc);color:var(--ink)}
 .acts button:disabled{opacity:.35}
 .trimrow{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
