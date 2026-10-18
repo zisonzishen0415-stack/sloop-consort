@@ -16,6 +16,7 @@
   const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const MIN_TRIM = 0.005;                    // ~35 ms at 7 s: short enough for a loop, long enough to grab
   let slot = 0, take = null, trim = { a: 0, b: 1 }, root = 60, loopMode = 0;
+  let loopPts = { a: 0, b: 1 };              // loop region within the trim, for LOOP+TAIL
   let fadeMs = 15, xfadeMs = 0, gainDb = 0;
   let recorder = null, recRAF = 0, recCtx = null, recAnalyser = null, recBuf = null, recT0 = 0;
   let livePeaks = null, liveLen = 0, liveScale = 0.06;
@@ -56,7 +57,8 @@
     for (const z of zones) {
       const data = imaEncode(z.s);
       const le = z.le == null ? z.s.length - 1 : Math.max(0, Math.min(z.s.length - 1, z.le | 0));
-      zs.push({ off: len, n: z.s.length, le, root: z.root, looped: z.loop ? 2 : 0 });
+      const ls = z.ls == null ? 0 : Math.max(0, Math.min(le, z.ls | 0));
+      zs.push({ off: len, n: z.s.length, ls, le, root: z.root, looped: z.loop ? 2 : 0 });
       parts.push(data);
       len += data.length;
     }
@@ -75,7 +77,7 @@
     const rate = Math.round(SMPC.RATE / 44100 * 65536);
     zs.forEach((z, j) => {
       const b = 32 + j * 28;
-      [z.off, z.n, 0, z.le, rate].forEach((x, k) => v.setUint32(b + k * 4, x >>> 0, true));
+      [z.off, z.n, z.ls, z.le, rate].forEach((x, k) => v.setUint32(b + k * 4, x >>> 0, true));
       v.setInt16(b + 20, z.root * 16, true);
       v.setInt16(b + 22, 0, true);
       hdr[b + 24] = 0;
@@ -221,8 +223,18 @@
     sel.style.right = ((1 - b) * 100) + "%";
     const lp = document.getElementById("smp-loopreg");
     lp.hidden = !take || !loopMode || recording();
-    lp.style.left = (a * 100) + "%";
-    lp.style.right = ((1 - b) * 100) + "%";
+    if (take) {
+      // LOOP is the whole trim; LOOP+TAIL uses the loop points inside it.
+      const la = loopMode === 2 ? loopPts.a : 0, lb = loopMode === 2 ? loopPts.b : 1;
+      const left = a + (b - a) * la, right = a + (b - a) * lb;
+      lp.style.left = (left * 100) + "%";
+      lp.style.right = ((1 - right) * 100) + "%";
+    } else {
+      lp.style.left = (a * 100) + "%";
+      lp.style.right = ((1 - b) * 100) + "%";
+    }
+    const lrow = document.getElementById("smp-looprow");
+    if (lrow) lrow.hidden = !take || loopMode !== 2 || recording();
     if (take) {
       const s = a * take.pcm.length / take.rate, e = b * take.pcm.length / take.rate;
       const hint = document.getElementById("smp-wavehint");
@@ -232,9 +244,12 @@
       document.getElementById("smp-cap").textContent = "/ " + MAX_SEC.toFixed(1) + " s";
       document.getElementById("smp-start").textContent = s.toFixed(3);
       document.getElementById("smp-end").textContent = e.toFixed(3);
+      const ls = document.getElementById("smp-loop-start"), le = document.getElementById("smp-loop-end");
+      if (ls) ls.textContent = (s + (e - s) * loopPts.a).toFixed(3);
+      if (le) le.textContent = (s + (e - s) * loopPts.b).toFixed(3);
     } else {
       drawHint();
-      ["smp-start", "smp-end"].forEach((id) => {
+      ["smp-start", "smp-end", "smp-loop-start", "smp-loop-end"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.textContent = "—";
       });
@@ -247,7 +262,7 @@
   }
   function loopLabel() {
     const el = document.getElementById("smp-loopmode");
-    if (el) el.textContent = loopMode ? "LOOP" : "ONE SHOT";
+    if (el) el.textContent = ["ONE SHOT", "LOOP", "LOOP+TAIL"][loopMode] || "ONE SHOT";
   }
   function gainLabel() {
     const el = document.getElementById("smp-gain");
@@ -298,6 +313,7 @@
     return Math.max(0, Math.min(take.pcm.length - 1, Math.round(f * take.pcm.length)));
   }
   // What will actually be heard/sent: the trim, with gain, fade and (in LOOP) a crossfaded seam.
+  // Returns the rendered PCM plus the loop points the FM-1 should use (in that PCM).
   // Nothing here mutates the take, so trim/fade/gain can be changed and undone freely.
   function region() {
     const x = take.pcm;
@@ -317,20 +333,31 @@
         out[out.length - 1 - i] *= w;
       }
     }
+    let ls = 0, le = out.length - 1;
+    if (loopMode === 2) {                      // LOOP+TAIL: the points are fractions of this trim
+      ls = Math.max(0, Math.min(out.length - 2, Math.round(loopPts.a * out.length)));
+      le = Math.max(ls + 1, Math.min(out.length - 1, Math.round(loopPts.b * out.length) - 1));
+      ls = Math.max(0, Math.min(out.length - 2, nearestZero(i0 + ls) - i0));
+      le = Math.max(ls + 1, Math.min(out.length - 1, nearestZero(i0 + le) - i0));
+    }
     if (loopMode && xfadeMs > 0) {
-      // Fold the tail onto the head, equal-power: the loop wraps from the sample before the tail
-      // (see upload) to out[0], where the tail now continues; by out[n-1] the head has resumed.
-      const n = Math.min(Math.round(take.rate * xfadeMs / 1000), out.length >> 2);
-      if (n > 1) for (let i = 0; i < n; i++) {
-        const th = (i / (n - 1)) * Math.PI / 2;
-        out[i] = out[i] * Math.sin(th) + out[out.length - n + i] * Math.cos(th);
+      // Fold the n samples before the loop end onto the loop start, equal-power; the
+      // uploaded loop end moves back by n, so a wrap lands on the folded tail.
+      const n = Math.min(Math.round(take.rate * xfadeMs / 1000), (le - ls + 1) >> 2);
+      if (n > 1) {
+        for (let i = 0; i < n; i++) {
+          const th = (i / (n - 1)) * Math.PI / 2;
+          out[ls + i] = out[ls + i] * Math.sin(th) + out[le - n + 1 + i] * Math.cos(th);
+        }
+        le -= n;
       }
     }
-    return out;
+    return { pcm: out, ls: loopMode ? ls : 0, le: loopMode ? le : out.length - 1 };
   }
   function pushUndo() {
     if (!take) return;
-    history.push({ pcm: take.pcm, trim: { a: trim.a, b: trim.b }, root, loopMode, fadeMs, xfadeMs, gainDb });
+    history.push({ pcm: take.pcm, trim: { a: trim.a, b: trim.b }, root, loopMode,
+      loopPts: { a: loopPts.a, b: loopPts.b }, fadeMs, xfadeMs, gainDb });
     if (history.length > 12) history.shift();
     updateUndo();
   }
@@ -345,6 +372,7 @@
     take.pcm = h.pcm;
     trim = { a: h.trim.a, b: h.trim.b };
     root = h.root; loopMode = h.loopMode;
+    loopPts = h.loopPts ? { a: h.loopPts.a, b: h.loopPts.b } : { a: 0, b: 1 };
     fadeMs = h.fadeMs; xfadeMs = h.xfadeMs; gainDb = h.gainDb || 0;
     rootLabel(); loopLabel(); gainLabel();
     drawWave(take.pcm); setTrim(trim.a, trim.b); updateUndo();
@@ -367,16 +395,16 @@
     if (!take) { toast(T("smp.needTake")); return; }
     if (recording()) { toast(T("smp.stopFirst")); return; }
     if (preview) { stopPreview(); return; }
-    const pcm = region();
+    const r = region(), pcm = r.pcm;
     const ac = new (window.AudioContext || window.webkitAudioContext)();
     const buf = ac.createBuffer(1, pcm.length, take.rate);
     buf.copyToChannel(pcm, 0);
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.loop = !!loopMode;                    // in LOOP the audition loops until pressed again
-    if (loopMode) {                           // wrap where the FM-1 wraps: before the folded tail
-      const nxf = xfadeMs > 0 ? Math.min(Math.round(take.rate * xfadeMs / 1000), pcm.length >> 2) : 0;
-      src.loopEnd = (pcm.length - nxf) / take.rate;
+    if (loopMode) {                           // wrap exactly where the FM-1 wraps
+      src.loopStart = r.ls / take.rate;
+      src.loopEnd = (r.le + 1) / take.rate;
     }
     src.connect(ac.destination);
     const btn = document.getElementById("smp-play");
@@ -591,7 +619,7 @@
   async function saveTake() {
     if (!take) { toast(T("smp.needTake")); return; }
     if (recording()) { toast(T("smp.stopFirst")); return; }
-    const pcm = resample(region(), take.rate, SMPC.RATE);
+    const pcm = resample(region().pcm, take.rate, SMPC.RATE);
     const btn = document.getElementById("smp-save");
     btn.disabled = true;
     try {
@@ -605,14 +633,15 @@
     if (!take) { toast(T("smp.needTake")); return; }
     if (recording()) { toast(T("smp.stopFirst")); return; }
     if (!link()) { toast(T("needConnect")); return; }
-    const pcm = resample(region(), take.rate, SMPC.RATE);
+    const r = region();
+    const pcm = resample(r.pcm, take.rate, SMPC.RATE);
     const name = (document.getElementById("smp-name").value || take.name.replace(/\.wav$/i, "")).toUpperCase();
     document.getElementById("smp-name").value = name;
-    // A crossfaded loop ends before the folded tail; the release (LOOP+TAIL) plays that tail out.
-    const nxf = loopMode && xfadeMs > 0 ? Math.min(Math.round(SMPC.RATE * xfadeMs / 1000), pcm.length >> 2) : 0;
-    const le = loopMode && nxf > 1 ? pcm.length - nxf - 1 : pcm.length - 1;
+    // region() already moved the loop end before a crossfaded tail; carry the points over.
+    const scale = r.pcm.length ? pcm.length / r.pcm.length : 1;
+    const ls = Math.round(r.ls * scale), le = Math.round(r.le * scale);
     let built;
-    try { built = buildSlot(name, [{ s: toInt16(pcm), root, loop: loopMode, le }]); }
+    try { built = buildSlot(name, [{ s: toInt16(pcm), root, loop: loopMode > 0, ls, le }]); }
     catch (e) { toast(e.message); return; }
     const btn = document.getElementById("smp-upload");
     btn.disabled = true;
@@ -699,7 +728,8 @@
     list.unshift({ id: take.id, name: take.name, when: now, stored, path, sec: take.pcm.length / take.rate });
     try { localStorage.setItem("consort.takes", JSON.stringify(list.slice(0, 20))); } catch (e) { /* full */ }
     dbPut({ id: take.id, name: take.name, when: now, rate: take.rate, pcm: take.pcm,
-      trim: { a: trim.a, b: trim.b }, root, loopMode, fadeMs, xfadeMs, gainDb,
+      trim: { a: trim.a, b: trim.b }, root, loopMode,
+      loopPts: { a: loopPts.a, b: loopPts.b }, fadeMs, xfadeMs, gainDb,
       label: document.getElementById("smp-name").value }).catch(() => {});
     renderTakes();
   }
@@ -711,7 +741,11 @@
       : { a: 0, b: 1 };
     if (trim.b <= trim.a) trim = { a: 0, b: 1 };
     root = Math.max(24, Math.min(96, st.root || 60));
-    loopMode = st.loopMode ? 1 : 0;
+    loopMode = Math.max(0, Math.min(2, st.loopMode | 0));
+    if (st.loopPts && isFinite(st.loopPts.a) && isFinite(st.loopPts.b)) {
+      const a = Math.max(0, Math.min(1, st.loopPts.a)), b = Math.max(0, Math.min(1, st.loopPts.b));
+      loopPts = b > a ? { a, b } : { a: 0, b: 1 };
+    } else loopPts = { a: 0, b: 1 };
     fadeMs = st.fadeMs == null ? 15 : Math.max(0, st.fadeMs);
     xfadeMs = st.xfadeMs == null ? 0 : Math.max(0, st.xfadeMs);
     gainDb = Math.max(-24, Math.min(24, st.gainDb || 0));
@@ -778,7 +812,7 @@
         const base = file.name.replace(/\.[^.]+$/, "");
         take = { id: takeId(), pcm, rate: buf.sampleRate,
           name: base.replace(/[\\/:*?"<>|]/g, "_") + ".wav" };
-        history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0;
+        history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0; loopPts = { a: 0, b: 1 };
         document.getElementById("smp-name").value =
           base.toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) || "SAMPLE";
         rootLabel(); loopLabel(); gainLabel();
@@ -933,7 +967,7 @@
           const d = new Date(), p = (x) => (x < 10 ? "0" : "") + x;
           take = { id: takeId(), pcm, rate: buf.sampleRate,
             name: "REC-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + ".wav" };
-          history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0;
+          history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0; loopPts = { a: 0, b: 1 };
           document.getElementById("smp-name").value = "REC-" + p(d.getHours()) + p(d.getMinutes());
           rootLabel(); loopLabel(); gainLabel();
           drawWave(pcm);
@@ -1021,8 +1055,23 @@
   document.getElementById("gain-inc").addEventListener("click", () => { pushUndo(); gainDb = Math.min(24, gainDb + 1); gainLabel(); });
   document.getElementById("smp-loopmode").addEventListener("click", () => {
     if (recording()) { toast(T("smp.stopFirst")); return; }
-    pushUndo(); stopPreview(); loopMode = loopMode ? 0 : 1; loopLabel(); setTrim(trim.a, trim.b);
+    pushUndo(); stopPreview(); loopMode = (loopMode + 1) % 3; loopLabel(); setTrim(trim.a, trim.b);
   });
+  function nudgeLoop(edge, dir) {
+    if (!take) { toast(T("smp.needTake")); return; }
+    if (recording()) { toast(T("smp.stopFirst")); return; }
+    pushUndo();
+    const dur = Math.max(0.01, (trim.b - trim.a) * take.pcm.length / take.rate);
+    const step = 0.01 / dur;                  // 10 ms inside the trimmed region
+    const gap = Math.min(0.5, step);          // keep at least one step between the points
+    if (edge < 0) loopPts.a = Math.max(0, Math.min(loopPts.b - gap, loopPts.a + dir * step));
+    else loopPts.b = Math.min(1, Math.max(loopPts.a + gap, loopPts.b + dir * step));
+    setTrim(trim.a, trim.b);
+  }
+  document.getElementById("loop-start-dec").addEventListener("click", () => nudgeLoop(-1, -1));
+  document.getElementById("loop-start-inc").addEventListener("click", () => nudgeLoop(-1, 1));
+  document.getElementById("loop-end-dec").addEventListener("click", () => nudgeLoop(1, -1));
+  document.getElementById("loop-end-inc").addEventListener("click", () => nudgeLoop(1, 1));
   document.getElementById("smp-name").addEventListener("input", (e) => {
     e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8);
   });
@@ -1079,7 +1128,7 @@
     _take: (pcm, rate, name) => {
       stopPreview();
       take = { id: takeId(), pcm, rate, name: name || "TEST.wav" };
-      history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0;
+      history = []; gainDb = 0; fadeMs = 15; xfadeMs = 0; loopMode = 0; loopPts = { a: 0, b: 1 };
       gainLabel(); loopLabel(); drawWave(pcm); setTrim(0, 1); autoTrim(); updateUndo();
     }
   };
