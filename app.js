@@ -207,7 +207,7 @@
     const p = (n) => (n < 10 ? "0" : "") + n;
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
-  window.ConsortApp = { get link() { return link; }, toast: toastMsg, when: when };
+  window.ConsortApp = { get link() { return link; }, toast: toastMsg, when: when, renderSongs };
 
   // ---- skin ----------------------------------------------------------------------------------------
   function rgb(hex) {
@@ -511,11 +511,12 @@
   function fileKind(name) {
     if (/\.sloopsong$/i.test(name)) return "song";
     if (/\.sloopset$/i.test(name)) return "set";
+    if (/\.wav$/i.test(name)) return "wav";
     if (/^SLOOP-backup-.*\.json$/i.test(name)) return "backup";
     if (/\.json$/i.test(name)) return "file";
     return "other";
   }
-  const KIND = { song: "SONG", set: "SET", backup: "BACKUP", file: "JSON", other: "FILE" };
+  const KIND = { song: "SONG", set: "SET", wav: "WAV", backup: "BACKUP", file: "JSON", other: "FILE" };
   function bytes(n) {
     n = +n || 0;
     return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
@@ -524,7 +525,7 @@
     if (!window.ConsortFiles) return [];
     try {
       return JSON.parse(ConsortFiles.list())
-        .filter((f) => f && /\.(sloopsong|sloopset|json)$/i.test(f.name || ""))
+        .filter((f) => f && /\.(sloopsong|sloopset|wav|json)$/i.test(f.name || ""))
         .map((f) => ({ ...f, kind: fileKind(f.name), managed: f.managed !== false, path: f.path || "Download/SLOOP/" }))
         .sort((a, b) => (b.date || 0) - (a.date || 0));
     } catch (e) { return []; }
@@ -569,7 +570,9 @@
       [T("songs.location"), (f.path || "").replace(/\/$/, "")]
     ];
     let data = null;
-    try { data = libraryJson(f); } catch (e) { /* unreadable or not JSON: the basics still show */ }
+    if (f.kind !== "wav") {
+      try { data = libraryJson(f); } catch (e) { /* unreadable or not JSON: the basics still show */ }
+    }
     if (data && data.format === "sloop-song") {
       rows.push([T("songs.songName"), data.name || "—"]);
       rows.push([T("songs.firmware"), data.firmware || "—"]);
@@ -716,6 +719,7 @@
   function primaryAction(f) {
     if (f.kind === "song") return [T("songs.load"), () => loadSong(f)];
     if (f.kind === "backup" || f.kind === "file") return [T("songs.restoreThis"), () => restorePhoneBackup(f)];
+    if (f.kind === "wav") return [T("menu.share"), () => shareFile(f)];
     return null;
   }
   function renderSongs() {
@@ -726,6 +730,7 @@
     const all = library();
     const list = all.filter((f) => songFilter === "all"
       || (songFilter === "song" && (f.kind === "song" || f.kind === "set"))
+      || (songFilter === "wav" && f.kind === "wav")
       || (songFilter === "backup" && (f.kind === "backup" || f.kind === "file")));
     box.replaceChildren();
     if (count) count.textContent = list.length + (list.length !== all.length ? " / " + all.length : "");

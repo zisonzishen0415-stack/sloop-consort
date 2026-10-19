@@ -190,6 +190,7 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const where = (await r.text()).trim();
       toast(T("songs.renderDone", { name: where.replace(/^.*[\\/]/, "") }));
+      if (window.ConsortApp && ConsortApp.renderSongs) ConsortApp.renderSongs();
     } catch (e) {
       toast(T("songs.renderFail", { err: e && e.message ? e.message : String(e) }));
     }

@@ -27,7 +27,7 @@ cp "$here/../index.html" "$here/../theme.css" "$here/../i18n.js" "$here/../proto
 # About reads this back through ConsortFiles.version(), so a test install can be identified
 "$BTW/aapt2" link -o "$OUTW\\base.apk" -I "$AJARW" \
     --manifest "$HEREW\\AndroidManifest.xml" -R "$OUTW\\res.zip" -A "$OUTW\\assets" \
-    --replace-version --version-code 3 --version-name "0.9.2-$(date +%Y%m%d-%H%M)" \
+    --replace-version --version-code 4 --version-name "0.9.3-$(date +%Y%m%d-%H%M)" \
     --auto-add-overlay --min-sdk-version 23 --target-sdk-version 36
 
 find "$here/src" -name '*.java' | while read -r f; do w "$f"; done > "$OUT/sources.txt"
