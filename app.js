@@ -159,12 +159,36 @@
       refreshSections();
       renderSongs();
       if (window.ConsortSamples) window.ConsortSamples.refresh();
+      return true;
     } catch (e) {
       link = null;
       connRaw = null;
       setConn(false);
       toastMsg(T("conn.noReply"));
+      return false;
     }
+  }
+
+  // Browsers with Web MIDI (Chrome/Edge/Android, and iOS Web-MIDI browsers such as MIDIWeb) reach
+  // the same FM-1 through CoreMIDI. Safari itself has no Web MIDI; there the page falls back to the mock.
+  const WEB_MIDI_FM1 = /fm-1|felucca|sloop|clipper|ota|composite|sinco|usb-midi/i;
+  async function startWebMidi() {
+    if (!navigator.requestMIDIAccess) throw new Error("no Web MIDI");
+    const access = await navigator.requestMIDIAccess({ sysex: true });
+    const input = [...access.inputs.values()].find((p) => WEB_MIDI_FM1.test(p.name || ""));
+    const output = [...access.outputs.values()].find((p) => WEB_MIDI_FM1.test(p.name || ""));
+    if (!input || !output) throw new Error("no FM-1 on Web MIDI");
+    const transport = {
+      send(bytes) { output.send(bytes); },
+      receive() { /* set by Sloop.connect through transport.link */ }
+    };
+    input.onmidimessage = (e) => {
+      const l = transport.link;
+      if (l && e.data) l.receive(Array.from(e.data));
+    };
+    const ok = await start(transport, output.name || "FM-1 (Web MIDI)");
+    if (!ok) throw new Error("no reply");
+    return true;
   }
 
   setConn(false);                     // localized "not connected" before the first MIDI callback
@@ -186,13 +210,21 @@
     };
     try { ConsortMidi.connect(); } catch (e) { /* no bridge */ }
   } else {
-    setTimeout(() => start(mockTransport(), "FM-1 (mock)"), 250);
+    const fallback = () => setTimeout(() => { if (!link) start(mockTransport(), "FM-1 (mock)"); }, 250);
+    if (navigator.requestMIDIAccess) startWebMidi().catch(fallback);
+    else fallback();
   }
 
   document.querySelector(".conn").addEventListener("click", () => {
-    if (link) return;
-    if (native) ConsortMidi.connect();
-    else start(mockTransport(), "FM-1 (mock)");
+    if (native) { if (!link) ConsortMidi.connect(); return; }
+    if (navigator.requestMIDIAccess && (!link || /mock/i.test(connRaw || ""))) {
+      startWebMidi().catch((e) => {
+        if (!link) start(mockTransport(), "FM-1 (mock)");
+        else toastMsg(T("conn.fail", { why: e && e.message ? e.message : String(e) }));
+      });
+      return;
+    }
+    if (!link) start(mockTransport(), "FM-1 (mock)");
   });
 
   // ---- storage -------------------------------------------------------------------------------------
@@ -207,7 +239,7 @@
     const p = (n) => (n < 10 ? "0" : "") + n;
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
-  window.ConsortApp = { get link() { return link; }, toast: toastMsg, when: when, renderSongs };
+  window.ConsortApp = { get link() { return link; }, toast: toastMsg, when: when, renderSongs, startWebMidi };
 
   // ---- skin ----------------------------------------------------------------------------------------
   function rgb(hex) {
@@ -508,6 +540,124 @@
   // (playlist), a full SLOOP-backup JSON, or another JSON. All of them are managed here: open,
   // load/restore, share, rename, delete; files found outside Download/SLOOP can be imported.
   let songFilter = "all";
+  // Browser/iOS mode: there is no native file bridge, so imported songs live in this tab and the
+  // rendered WAVs are Blobs. The same list, actions and renderer are used on Android.
+  let webFiles = [];
+  const webEntry = (name) => webFiles.find((w) => w.name === name) || null;
+  function webUnique(name) {
+    if (!webEntry(name)) return name;
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : "";
+    for (let i = 1; ; i++) {
+      const n = base + " (" + i + ")" + ext;
+      if (!webEntry(n)) return n;
+    }
+  }
+  function webDownload(blob, name) {
+    const url = URL.createObjectURL(blob), a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  async function webShare(blob, name) {
+    try {
+      const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name });
+        return;
+      }
+    } catch (e) { /* the share sheet was dismissed or unsupported: download instead */ }
+    webDownload(blob, name);
+  }
+  let webDbPromise = null;
+  function webDb() {
+    if (!window.indexedDB) return Promise.reject(new Error("no IndexedDB"));
+    if (!webDbPromise) webDbPromise = new Promise((res, rej) => {
+      const r = indexedDB.open("consort-web", 1);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        if (!d.objectStoreNames.contains("files")) d.createObjectStore("files", { keyPath: "name" });
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    return webDbPromise;
+  }
+  function webPut(entry) {
+    return webDb().then((d) => new Promise((res, rej) => {
+      const tx = d.transaction("files", "readwrite");
+      tx.objectStore("files").put(entry);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    })).catch(() => toastMsg(T("storage.fail")));
+  }
+  function webDel(name) {
+    return webDb().then((d) => new Promise((res, rej) => {
+      const tx = d.transaction("files", "readwrite");
+      tx.objectStore("files").delete(name);
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    })).catch(() => toastMsg(T("storage.fail")));
+  }
+  async function webLoad() {
+    try {
+      const d = await webDb();
+      const rows = await new Promise((res, rej) => {
+        const tx = d.transaction("files", "readonly"), r = tx.objectStore("files").getAll();
+        r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
+      });
+      if (rows.length) {
+        webFiles = rows.sort((a, b) => (b.date || 0) - (a.date || 0));
+        renderSongs();
+      }
+    } catch (e) { /* private mode / no IndexedDB: this session still works */ }
+  }
+  window.ConsortWeb = {
+    get: webEntry,
+    addFile: (name, text) => {
+      const n = webUnique(name);
+      const entry = { name: n, size: text.length, date: Math.floor(Date.now() / 1000), kind: fileKind(n),
+        managed: true, path: "Browser", text };
+      webFiles.unshift(entry);
+      webPut(entry);
+      renderSongs();
+      return n;
+    },
+    addWav: (name, bytes) => {
+      const n = webUnique(name);
+      const blob = new Blob([bytes], { type: "audio/wav" });
+      const entry = { name: n, size: bytes.length, date: Math.floor(Date.now() / 1000), kind: "wav",
+        managed: true, path: "Browser", blob };
+      webFiles.unshift(entry);
+      webPut(entry);
+      renderSongs();
+      return n;
+    },
+    share: (name) => {
+      const w = webEntry(name);
+      if (!w) return false;
+      if (w.blob) webShare(w.blob, w.name);
+      else if (w.text) webShare(new Blob([w.text], { type: "application/json" }), w.name);
+      else return false;
+      return true;
+    },
+    remove: (name) => {
+      webFiles = webFiles.filter((w) => w.name !== name);
+      webDel(name);
+      renderSongs();
+    },
+    rename: (from, to) => {
+      const w = webEntry(from);
+      if (!w) return false;
+      const n = webUnique(to);
+      w.name = n;
+      webDel(from);
+      webPut(w);
+      renderSongs();
+      return n;
+    },
+    refresh: () => renderSongs()
+  };
   function fileKind(name) {
     if (/\.sloopsong$/i.test(name)) return "song";
     if (/\.sloopset$/i.test(name)) return "set";
@@ -522,7 +672,7 @@
     return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
   }
   function library() {
-    if (!window.ConsortFiles) return [];
+    if (!window.ConsortFiles) return webFiles.slice().sort((a, b) => (b.date || 0) - (a.date || 0));
     try {
       return JSON.parse(ConsortFiles.list())
         .filter((f) => f && /\.(sloopsong|sloopset|wav|json)$/i.test(f.name || ""))
@@ -531,7 +681,11 @@
     } catch (e) { return []; }
   }
   function libraryJson(f) {
-    if (!window.ConsortFiles) throw new Error(T("songs.previewOnly"));
+    if (!window.ConsortFiles) {
+      const w = webEntry(f.name);
+      if (!w || !w.text) throw new Error(T("songs.readFail", { name: f.name }));
+      return JSON.parse(w.text);
+    }
     const text = ConsortFiles.readText(f.name, f.path || "");
     if (text == null || text === "") throw new Error(T("songs.readFail", { name: f.name }));
     return JSON.parse(text);
@@ -601,7 +755,13 @@
     return box;
   }
   function shareFile(f) {
-    if (!window.ConsortFiles) { toastMsg(T("songs.previewOnly")); return; }
+    if (!window.ConsortFiles) {
+      const w = webEntry(f.name);
+      if (!w) { toastMsg(T("songs.shareFail", { name: f.name })); return; }
+      if (w.blob) webShare(w.blob, w.name);
+      else if (w.text) webShare(new Blob([w.text], { type: "application/json" }), w.name);
+      return;
+    }
     try { ConsortFiles.shareAt(f.name, f.path || ""); }
     catch (e) { toastMsg(T("songs.shareFail", { name: f.name })); }
   }
@@ -609,7 +769,11 @@
     const base = String(f.name || data.name || "SONG").replace(/\.(sloopsong|sloopset|json)$/i, "")
       .replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 40) || "SONG";
     const name = base + "." + ext;
-    if (!window.ConsortFiles || !ConsortFiles.shareText) { toastMsg(T("songs.previewOnly")); return; }
+    if (!window.ConsortFiles) {
+      webShare(new Blob([JSON.stringify(data)], { type: "application/json" }), name);
+      return;
+    }
+    if (!ConsortFiles.shareText) { toastMsg(T("songs.previewOnly")); return; }
     let ok = false;
     try { ok = ConsortFiles.shareText(name, JSON.stringify(data), "application/json"); }
     catch (e) { ok = false; }
@@ -638,19 +802,35 @@
   function renameFile(f) {
     const to = prompt(T("menu.newName"), f.name);
     if (!to || to === f.name) return;
-    let ok = false;
-    if (window.ConsortFiles) {
-      try { ok = ConsortFiles.renameAt(f.name, f.path || "", to); } catch (e) { ok = false; }
+    if (!window.ConsortFiles) {
+      const w = webEntry(f.name);
+      if (!w) { toastMsg(T("file.renameFail", { name: f.name })); return; }
+      let next = to.trim();
+      const dot = f.name.lastIndexOf("."), ext = dot > 0 ? f.name.slice(dot) : "";
+      if (ext && !next.toLowerCase().endsWith(ext.toLowerCase())) next += ext;
+      if (next === w.name) return;
+      if (webEntry(next)) { toastMsg(T("file.renameFail", { name: f.name })); return; }
+      w.name = next;
+      renderSongs();
+      return;
     }
+    let ok = false;
+    try { ok = ConsortFiles.renameAt(f.name, f.path || "", to); } catch (e) { ok = false; }
     if (!ok) { toastMsg(T("file.renameFail", { name: f.name })); return; }
     renderSongs();
   }
   function deleteFile(f) {
     if (!confirm(T("deleteConfirm", { name: f.name }))) return;
-    let ok = false;
-    if (window.ConsortFiles) {
-      try { ok = ConsortFiles.deleteAt(f.name, f.path || ""); } catch (e) { ok = false; }
+    if (!window.ConsortFiles) {
+      const i = webFiles.findIndex((w) => w.name === f.name);
+      if (i < 0) { toastMsg(T("file.deleteFail", { name: f.name })); return; }
+      webFiles.splice(i, 1);
+      renderSongs();
+      toastMsg(T("deleted", { name: f.name }));
+      return;
     }
+    let ok = false;
+    try { ok = ConsortFiles.deleteAt(f.name, f.path || ""); } catch (e) { ok = false; }
     if (!ok) { toastMsg(T("file.deleteFail", { name: f.name })); return; }
     renderSongs();
     toastMsg(T("deleted", { name: f.name }));
@@ -666,7 +846,16 @@
     toastMsg(T("songs.importedToLibrary", { name }));
   }
   function openFile(f) {
-    if (!window.ConsortFiles) { toastMsg(T("songs.previewOnly")); return; }
+    if (!window.ConsortFiles) {
+      const w = webEntry(f.name);
+      if (!w) { toastMsg(T("songs.openFail", { name: f.name })); return; }
+      if (w.blob) {
+        const url = URL.createObjectURL(w.blob);
+        window.open(url, "_blank");
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } else if (w.text) webDownload(new Blob([w.text], { type: "application/json" }), w.name);
+      return;
+    }
     try { ConsortFiles.openWith(f.name, f.path || ""); }
     catch (e) { toastMsg(T("songs.openFail", { name: f.name })); }
   }
@@ -736,7 +925,7 @@
     if (count) count.textContent = list.length + (list.length !== all.length ? " / " + all.length : "");
     if (empty) {
       empty.style.display = list.length ? "none" : "";
-      empty.textContent = all.length ? T("songs.noneMatch") : (window.ConsortFiles ? T("songs.none") : T("songs.previewOnly"));
+      empty.textContent = all.length ? T("songs.noneMatch") : T("songs.none");
     }
     list.forEach((f) => {
       const row = document.createElement("div");
@@ -782,6 +971,27 @@
     inp.addEventListener("change", async () => {
       const files = [...(inp.files || [])];
       if (!files.length) return;
+      if (!window.ConsortFiles) {
+        let ok = 0;
+        for (const file of files) {
+          try {
+            const text = await file.text();
+            webFiles = webFiles.filter((w) => w.name !== file.name);
+            const entry = { name: file.name, size: file.size, date: Math.floor(Date.now() / 1000),
+              kind: fileKind(file.name), managed: true, path: "Browser", text };
+            webFiles.unshift(entry);
+            webPut(entry);
+            ok++;
+          } catch (e) { /* report below */ }
+        }
+        if (ok) {
+          toastMsg(ok === 1 ? T("songs.imported", { name: files[0].name }) : T("songs.importedMany", { n: ok }));
+          renderSongs();
+        } else {
+          toastMsg(T("songs.importFail", { err: files[0].name }));
+        }
+        return;
+      }
       let ok = 0;
       for (const file of files) {
         try {
@@ -815,9 +1025,14 @@
         if (btn && total) btn.textContent = Math.round(done / total * 100) + "%";
       }, true);
       const safe = String(file.name || "SONG").replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 40) || "SONG";
-      const r = await fetch("/save?name=" + encodeURIComponent(safe + ".sloopsong") + "&type=application/json",
-        { method: "POST", body: JSON.stringify(file) });
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!window.ConsortFiles) {
+        if (!window.ConsortWeb) throw new Error("no file library");
+        ConsortWeb.addFile(safe + ".sloopsong", JSON.stringify(file));
+      } else {
+        const r = await fetch("/save?name=" + encodeURIComponent(safe + ".sloopsong") + "&type=application/json",
+          { method: "POST", body: JSON.stringify(file) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+      }
       toastMsg(T("songs.exportedSamples", { name: file.name }));
       renderSongs();
     } catch (e) { toastMsg(T("songs.exportFail", { err: e.message })); }
@@ -840,11 +1055,16 @@
       const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
       const fileName = "SLOOP-backup-" + stamp + ".json";
       let fileSaved = true;
-      try {
-        const r = await fetch("/save?name=" + encodeURIComponent(fileName) + "&type=application/json",
-          { method: "POST", body: JSON.stringify(file) });
-        fileSaved = r.ok;
-      } catch (e) { fileSaved = !window.ConsortFiles; }   // the static preview has no saver
+      if (!window.ConsortFiles) {
+        try { if (window.ConsortWeb) ConsortWeb.addFile(fileName, JSON.stringify(file)); else fileSaved = false; }
+        catch (e) { fileSaved = false; }
+      } else {
+        try {
+          const r = await fetch("/save?name=" + encodeURIComponent(fileName) + "&type=application/json",
+            { method: "POST", body: JSON.stringify(file) });
+          fileSaved = r.ok;
+        } catch (e) { fileSaved = false; }
+      }
       const list = backups();
       const name = T("songs.backupName", { when: when(Date.now()) });
       list.unshift({ name, date: Date.now(), file });
@@ -957,11 +1177,15 @@
   document.getElementById("th-save").addEventListener("click", saveCurrent);
   document.getElementById("th-import").addEventListener("click", importCode);
   renderSongs();
+  if (!window.ConsortFiles) webLoad();
   renderPhoneThemes();
   try {
     if (window.ConsortFiles && ConsortFiles.version) {
       const v = ConsortFiles.version();
       if (v) document.getElementById("app-version").textContent = "v" + v;
+    } else {
+      const el = document.getElementById("app-version");
+      if (el) el.textContent = "v0.9.4 web";
     }
   } catch (e) { /* the browser preview has no package version */ }
   if (current) renderCurrent(current);

@@ -14,7 +14,7 @@
   let wasmPromise = null;
 
   function wasmModule() {
-    if (!wasmPromise) wasmPromise = fetch("sloop.wasm").then((r) => {
+    if (!wasmPromise) wasmPromise = fetch("sloop.wasm?v=0.9.4").then((r) => {
       if (!r.ok) throw new Error("sloop.wasm: HTTP " + r.status);
       return r.arrayBuffer();
     }).then((b) => WebAssembly.compile(b));
@@ -162,10 +162,16 @@
   }
 
   async function renderFile(f) {
-    if (!window.ConsortFiles) { toast(T("songs.previewOnly")); return; }
+    const web = !window.ConsortFiles;
     let text = null;
-    try { text = ConsortFiles.readText(f.name, f.path || ""); }
-    catch (e) { text = null; }
+    if (web) {
+      const w = window.ConsortWeb && ConsortWeb.get(f.name);
+      if (!w || !w.text) { toast(T("songs.readFail", { name: f.name })); return; }
+      text = w.text;
+    } else {
+      try { text = ConsortFiles.readText(f.name, f.path || ""); }
+      catch (e) { text = null; }
+    }
     if (!text) { toast(T("songs.readFail", { name: f.name })); return; }
     let data;
     try { data = JSON.parse(text); }
@@ -185,6 +191,11 @@
       toast(T("songs.rendering", { pct: 0 }));
       const bytes = await renderData(data, seconds, (pct) => toast(T("songs.rendering", { pct })));
       const name = String(f.name || "song").replace(/\.[^.]+$/, "") + "-mix.wav";
+      if (web) {
+        const stored = window.ConsortWeb ? ConsortWeb.addWav(name, bytes) : name;
+        toast(T("songs.renderDone", { name: stored }));
+        return;
+      }
       const r = await fetch("/save?name=" + encodeURIComponent(name) + "&type=audio/wav",
         { method: "POST", body: bytes });
       if (!r.ok) throw new Error("HTTP " + r.status);

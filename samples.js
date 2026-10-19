@@ -707,8 +707,10 @@
     toast(T("smp.tuned", { note: noteName(root) }));
   }
   async function saveWav(pcm, name, loop) {
+    const bytes = wavBytes(toInt16(pcm), SMPC.RATE, loop);
+    if (!window.ConsortFiles && window.ConsortWeb) return ConsortWeb.addWav(name, bytes);
     const r = await fetch("/save?name=" + encodeURIComponent(name) + "&type=audio/wav",
-      { method: "POST", body: wavBytes(toInt16(pcm), SMPC.RATE, loop) });
+      { method: "POST", body: bytes });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const where = (await r.text()).trim();
     return where || name;
@@ -938,6 +940,25 @@
         }
       } catch (e) { /* report below */ }
     }
+    if (!window.ConsortFiles && window.ConsortWeb) {
+      const w = ConsortWeb.get(t.stored || t.name);
+      if (w && w.blob) {
+        try {
+          const raw = await w.blob.arrayBuffer();
+          const meta = wavLoopInfo(raw);
+          const ac = new (window.AudioContext || window.webkitAudioContext)();
+          const buf = await ac.decodeAudioData(raw);
+          ac.close().catch(() => {});
+          const pcm = monoPcm(buf), lp = wavLoopState(meta, pcm, buf.sampleRate);
+          adopt({ id, name: t.name, rate: buf.sampleRate, pcm,
+            trim: { a: 0, b: 1 }, root, loopMode: lp ? lp.mode : 0,
+            loopPts: lp ? lp.pts : undefined, fadeMs: 0, xfadeMs: 0, gainDb: 0,
+            label: t.name.replace(/\.wav$/i, "").toUpperCase().replace(/[^A-Z0-9 _-]/g, "").slice(0, 8) });
+          toast(T("smp.loaded", { name: t.name }));
+          return;
+        } catch (e) { /* report below */ }
+      }
+    }
     toast(T("smp.loadFail", { name: t.name }));
   }
   function fileBytes(file) {
@@ -1027,6 +1048,10 @@
       let ok = true;
       const from = t.stored || t.name;
       if (window.ConsortFiles) { try { ok = ConsortFiles.renameAt(from, t.path || "Download/SLOOP/", next); } catch (e) { ok = false; } }
+      else if (window.ConsortWeb) {
+        const renamed = ConsortWeb.rename(from, next);
+        if (renamed) next = renamed; else ok = false;
+      }
       if (!ok) { toast(T("file.renameFail", { name: t.name })); return; }
       const list = takes();
       if (list[i]) {
@@ -1050,6 +1075,7 @@
           return;
         } catch (e) { /* no bridge */ }
       }
+      if (window.ConsortWeb && ConsortWeb.share(t.stored || t.name)) return;
       toast(T("smp.shareNone"));
     });
     const del = document.createElement("button");
@@ -1067,6 +1093,7 @@
         } catch (e) { ok = false; }
       }
       if (!ok) { toast(T("file.deleteFail", { name: t.name })); return; }
+      if (!window.ConsortFiles && window.ConsortWeb) ConsortWeb.remove(t.stored || t.name);
       const id = t.id || t.name;
       dbDel(id);
       const list = takes();

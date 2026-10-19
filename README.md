@@ -48,7 +48,11 @@ The signed APK is written to `consort.apk` at the project root (and `android/con
     python -m http.server 8765
     # open http://127.0.0.1:8765/index.html
 
-Without the native bridge the page connects to a mock FM-1, so the whole UI and protocol flow can be exercised in a browser. Transfers are simulated; nothing is written to Download/SLOOP in this mode.
+Without the native bridge the page connects to a mock FM-1, so the whole UI and protocol flow can be exercised in a browser. Transfers are simulated.
+
+## Web, iPhone and iPad
+
+The same page is a PWA. In Safari/iOS the offline renderer, the browser file library (IndexedDB), WAV share/download and local sampler editing work; the FM-1 itself, and with it themes, FX, songs and sample upload, needs the Web MIDI API, which Safari does not provide. On iOS use a Web-MIDI-capable browser (for example MIDIWeb or Midi浏览器, which bridge CoreMIDI) and open the page there; USB-C iPhones/iPads need a USB host connection. A native iOS app (CoreMIDI + UIDocumentPicker/ShareSheet) is possible but needs macOS and Xcode; it is not built here.
 
 ## Protocol
 
@@ -82,7 +86,9 @@ included), and `.sloopsong` save/load through the phone library. The loop points
 states, the `smpl` round trip, multi-zone headers and the TRACK/KIT assignment were also checked
 against a scripted SLOOP 2.7 device; the zone and engine numbers are resolved from `DESC`/`INFO`, not
 hardcoded. The offline renderer was verified in the app page with a two-section song: 5.33 s of
-44.1 kHz stereo WAV in 106 ms, and the rendered file then managed from the WAV filter. It has not yet
+44.1 kHz stereo WAV in 106 ms, and the rendered file then managed from the WAV filter. The web/iOS
+mode was checked in Chromium with a fake Web MIDI port and an IndexedDB library (import, sampler
+save, full-song render, persistence); a physical iPhone + FM-1 pass is still needed. It has not yet
 had a physical Android-device smoke test. Bug reports are welcome.
 
 ## Credits and licences

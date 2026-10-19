@@ -48,7 +48,11 @@ FM-1 仍然是乐器。Consort 是额外的一双手：
     python -m http.server 8765
     # open http://127.0.0.1:8765/index.html
 
-没有 native bridge 时页面连接 mock FM-1，所以整个 UI 和协议流程可以在浏览器中演练。传输是模拟的；此模式不会写 `Download/SLOOP`。
+没有 native bridge 时页面连接 mock FM-1，所以整个 UI 和协议流程可以在浏览器中演练。传输是模拟的。
+
+## Web、iPhone 与 iPad
+
+同一个页面也是 PWA。在 Safari/iOS 上，离线渲染、浏览器文件库（IndexedDB）、WAV 分享/下载和本地采样编辑都能用；连接 FM-1（以及主题、FX、歌曲和采样上传）需要 Web MIDI API，而 Safari 不提供。iOS 上请用支持 Web MIDI 的浏览器（例如 MIDIWeb、Midi浏览器，它们把 CoreMIDI 桥接给网页）打开页面；USB-C iPhone/iPad 需要 USB host 连接。原生 iOS app（CoreMIDI + UIDocumentPicker/ShareSheet）可行，但需要 macOS 和 Xcode，这里没有构建。
 
 ## 协议
 
@@ -72,7 +76,7 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 
 ## 状态
 
-已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理；尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
+已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理。Web/iOS 模式在 Chromium 里用假 Web MIDI 端口和 IndexedDB 文件库验证过（导入、采样保存、整曲渲染、持久化）；还缺 iPhone + FM-1 的真机验证。尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
 
 ## 致谢与许可
 
