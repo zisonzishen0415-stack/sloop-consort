@@ -41,7 +41,7 @@ FM-1 仍然是乐器。Consort 是额外的一双手：
 
     bash android/build.sh
 
-签名的 APK 写到项目根目录的 `consort.apk`（以及 `android/consort.apk`）。`About` 显示包版本；构建脚本把时间写进版本名，因此可以区分侧载测试构建。
+签名的 APK 写到项目根目录的 `consort.apk`（以及 `android/consort.apk`）。`About` 显示包版本；构建脚本把时间写进版本名，因此可以区分侧载测试构建。离线渲染器使用随包携带的 `sloop.wasm`（SLOOP 2.7.1，GPL-3.0），构建脚本会把它复制进 APK。
 
 ## 无硬件预览
 
@@ -61,6 +61,8 @@ i18n.js      八种界面语言
 protocol.js  帧、Link、备份对象、.sloopsong、主题、SMP、DESC/TRACK
 app.js       皮肤、FX、歌曲、设置
 samples.js   采样器
+render.js    通过 sloop.wasm 离线渲染整首/loop 为 WAV
+sloop.wasm   SLOOP 2.7.1 编译成的 WebAssembly（GPL-3.0）
 android/     WebView shell、本地服务器、USB MIDI bridge、文件 bridge
 ```
 
@@ -70,7 +72,7 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 
 ## 状态
 
-已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。欢迎反馈 bug。
+已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理；尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
 
 ## 致谢与许可
 
@@ -78,4 +80,4 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 - M-VAVE FM-1 归其所有者所有。
 - 代码为 GPL-3.0-only（见 `LICENSE`），与开发时参考的 SLOOP 编辑器源码一致。
 - Terminus 字体为 SIL OFL 1.1；见 `LICENSES/Terminus-OFL.txt`。
-- 离线渲染器内嵌编译成 WebAssembly 的 SLOOP 2.7.1 固件（`sloop.wasm`，GPL-3.0）；它由 SLOOP 源码构建，运行与 FM-1 相同的 DSP。
+- 离线渲染器内嵌编译成 WebAssembly 的 SLOOP 2.7.1 固件（`sloop.wasm`，GPL-3.0）；它由 [SLOOP 源码](https://github.com/isod89/sloop-fm1)构建，运行与 FM-1 相同的 DSP。

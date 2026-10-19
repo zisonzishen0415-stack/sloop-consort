@@ -41,7 +41,7 @@ Needs the Android SDK (build-tools and a platform), JDK 17, and a shell where `a
 
     bash android/build.sh
 
-The signed APK is written to `consort.apk` at the project root (and `android/consort.apk`). `About` shows the package version; the build script stamps the time into it, so a sideloaded test build can be identified.
+The signed APK is written to `consort.apk` at the project root (and `android/consort.apk`). `About` shows the package version; the build script stamps the time into it, so a sideloaded test build can be identified. The offline renderer uses the bundled `sloop.wasm` (SLOOP 2.7.1, GPL-3.0); the build script copies it into the APK.
 
 ## Preview without hardware
 
@@ -61,6 +61,8 @@ i18n.js      the eight interface languages
 protocol.js  framing, Link, backup objects, .sloopsong, themes, SMP, DESC/TRACK
 app.js       skin, FX, songs, settings
 samples.js   the sampler
+render.js    offline WAV render (whole song or loop) through sloop.wasm
+sloop.wasm   SLOOP 2.7.1 compiled to WebAssembly (GPL-3.0)
 android/     WebView shell, local server, USB MIDI bridge, file bridge
 ```
 
@@ -79,7 +81,9 @@ global SET, theme read/save/write-back and skin, backup to `Download/SLOOP` with
 included), and `.sloopsong` save/load through the phone library. The loop points, the three loop
 states, the `smpl` round trip, multi-zone headers and the TRACK/KIT assignment were also checked
 against a scripted SLOOP 2.7 device; the zone and engine numbers are resolved from `DESC`/`INFO`, not
-hardcoded. Bug reports are welcome.
+hardcoded. The offline renderer was verified in the app page with a two-section song: 5.33 s of
+44.1 kHz stereo WAV in 106 ms, and the rendered file then managed from the WAV filter. It has not yet
+had a physical Android-device smoke test. Bug reports are welcome.
 
 ## Credits and licences
 
@@ -87,4 +91,4 @@ hardcoded. Bug reports are welcome.
 - The M-VAVE FM-1 belongs to its owners.
 - The code is GPL-3.0-only (see `LICENSE`), matching the SLOOP editor sources it was developed against.
 - The Terminus font is SIL OFL 1.1; see `LICENSES/Terminus-OFL.txt`.
-- The offline renderer embeds the SLOOP 2.7.1 firmware compiled to WebAssembly (`sloop.wasm`), GPL-3.0; it is built from the SLOOP sources and runs the same DSP as the FM-1.
+- The offline renderer embeds the SLOOP 2.7.1 firmware compiled to WebAssembly (`sloop.wasm`), GPL-3.0; it is built from the [SLOOP sources](https://github.com/isod89/sloop-fm1) and runs the same DSP as the FM-1.
