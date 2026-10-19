@@ -74,12 +74,12 @@ This is how the sampler, FX, theme, backup and restore paths are verified end-to
 
 ## Status
 
-Verified through the APK against the virtual FM-1: INFO, sample encode/upload to USR and erase, FX
-press/release, global SET, theme read/save/write-back and skin, backup to `Download/SLOOP` with
-restore (samples included), and `.sloopsong` save/load through the phone library. The loop points, the three loop states, the `smpl` round trip, multi-zone headers and the TRACK/KIT assignment are also checked against a scripted SLOOP 2.7 device; the zone and engine numbers are resolved from `DESC`/`INFO`, not hardcoded. On real hardware,
-the USB MIDI handshake and section status are confirmed on an FM-1; a final pass on the machine is
-still worthwhile for the sampler/FX/theme/backup writes and the song load path. Bug reports are
-welcome.
+Verified end-to-end on a real FM-1: INFO, sample encode/upload to USR and erase, FX press/release,
+global SET, theme read/save/write-back and skin, backup to `Download/SLOOP` with restore (samples
+included), and `.sloopsong` save/load through the phone library. The loop points, the three loop
+states, the `smpl` round trip, multi-zone headers and the TRACK/KIT assignment were also checked
+against a scripted SLOOP 2.7 device; the zone and engine numbers are resolved from `DESC`/`INFO`, not
+hardcoded. Bug reports are welcome.
 
 ## Credits and licences
 

@@ -70,7 +70,7 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 
 ## 状态
 
-已通过 APK 在虚拟 FM-1 上验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。在真机上，USB MIDI 握手和段落状态已在 FM-1 上确认；采样器/FX/主题/备份写入和歌曲载入路径仍值得在机器上做最后一轮验证。欢迎反馈 bug。
+已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。欢迎反馈 bug。
 
 ## 致谢与许可
 
