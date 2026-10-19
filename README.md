@@ -52,7 +52,9 @@ Without the native bridge the page connects to a mock FM-1, so the whole UI and 
 
 ## Web, iPhone and iPad
 
-The same page is a PWA. In Safari/iOS the offline renderer, the browser file library (IndexedDB), WAV share/download and local sampler editing work; the FM-1 itself, and with it themes, FX, songs and sample upload, needs the Web MIDI API, which Safari does not provide. On iOS use a Web-MIDI-capable browser (for example MIDIWeb or Midi浏览器, which bridge CoreMIDI) and open the page there; USB-C iPhones/iPads need a USB host connection. A native iOS app (CoreMIDI + UIDocumentPicker/ShareSheet) is possible but needs macOS and Xcode; it is not built here.
+The same page is a PWA, live at **https://zisonzishen0415-stack.github.io/sloop-consort/**. In Safari/iOS the offline renderer, the browser file library (IndexedDB), WAV share/download and local sampler editing work; the FM-1 itself, and with it themes, FX, songs and sample upload, needs the Web MIDI API, which Safari does not provide. On iOS open the page in [MIDIWeb Browser](https://apps.apple.com/app/id6757226617) (free; bridges CoreMIDI, including SysEx) or Midi浏览器; USB-C iPhones/iPads need a USB host connection. The browser is the iOS client — no native app is planned.
+
+**iPhone / iPad quick test:** install MIDIWeb Browser, connect the FM-1 through USB-C (or a Camera Adapter), open the live URL inside MIDIWeb, and tap the connection button. Allow MIDI/SysEx when asked; the banner should show `Hügelton Instruments Felucca`. Offline render and the WAV library also work in Safari without Web MIDI.
 
 ## Protocol
 
@@ -87,8 +89,10 @@ states, the `smpl` round trip, multi-zone headers and the TRACK/KIT assignment w
 against a scripted SLOOP 2.7 device; the zone and engine numbers are resolved from `DESC`/`INFO`, not
 hardcoded. The offline renderer was verified in the app page with a two-section song: 5.33 s of
 44.1 kHz stereo WAV in 106 ms, and the rendered file then managed from the WAV filter. The web/iOS
-mode was checked in Chromium with a fake Web MIDI port and an IndexedDB library (import, sampler
-save, full-song render, persistence); a physical iPhone + FM-1 pass is still needed. It has not yet
+mode was checked in Chromium and in WebKit (Safari's engine) with a Web MIDI port and an IndexedDB
+library: connect/INFO, sampler save, USR upload, WAV persistence across a reload, and full-song
+render. A physical iPhone + FM-1 pass is the remaining hardware check; Safari itself needs a Web
+MIDI browser for the FM-1 link. It has not yet
 had a physical Android-device smoke test. Bug reports are welcome.
 
 ## Credits and licences

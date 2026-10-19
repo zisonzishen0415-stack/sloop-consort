@@ -52,7 +52,9 @@ FM-1 仍然是乐器。Consort 是额外的一双手：
 
 ## Web、iPhone 与 iPad
 
-同一个页面也是 PWA。在 Safari/iOS 上，离线渲染、浏览器文件库（IndexedDB）、WAV 分享/下载和本地采样编辑都能用；连接 FM-1（以及主题、FX、歌曲和采样上传）需要 Web MIDI API，而 Safari 不提供。iOS 上请用支持 Web MIDI 的浏览器（例如 MIDIWeb、Midi浏览器，它们把 CoreMIDI 桥接给网页）打开页面；USB-C iPhone/iPad 需要 USB host 连接。原生 iOS app（CoreMIDI + UIDocumentPicker/ShareSheet）可行，但需要 macOS 和 Xcode，这里没有构建。
+同一个页面也是 PWA，在线地址：**https://zisonzishen0415-stack.github.io/sloop-consort/**。在 Safari/iOS 上，离线渲染、浏览器文件库（IndexedDB）、WAV 分享/下载和本地采样编辑都能用；连接 FM-1（以及主题、FX、歌曲和采样上传）需要 Web MIDI API，而 Safari 不提供。iOS 上请用 [MIDIWeb Browser](https://apps.apple.com/app/id6757226617)（免费，把 CoreMIDI 包括 SysEx 桥接给网页）或 Midi浏览器 打开页面；USB-C iPhone/iPad 需要 USB host 连接。iOS 客户端就是浏览器，不做原生 app。
+
+**iPhone / iPad 快速验证：** 安装 MIDIWeb Browser，用 USB-C 线（或 Camera Adapter）连接 FM-1，在 MIDIWeb 里打开在线地址，点连接按钮，允许 MIDI/SysEx；banner 应显示 `Hügelton Instruments Felucca`。离线渲染和 WAV 库在 Safari 里不需要 Web MIDI 也能用。
 
 ## 协议
 
@@ -76,7 +78,7 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 
 ## 状态
 
-已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理。Web/iOS 模式在 Chromium 里用假 Web MIDI 端口和 IndexedDB 文件库验证过（导入、采样保存、整曲渲染、持久化）；还缺 iPhone + FM-1 的真机验证。尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
+已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理。Web/iOS 模式在 Chromium 和 WebKit（Safari 引擎）里用 Web MIDI 端口和 IndexedDB 文件库验证过：连接/INFO、采样保存、USR 上传、重载后 WAV 仍在、整曲渲染。还缺 iPhone + FM-1 的真机验证；Safari 本身连接 FM-1 需要 Web MIDI 浏览器。尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
 
 ## 致谢与许可
 

@@ -172,6 +172,14 @@
   // Browsers with Web MIDI (Chrome/Edge/Android, and iOS Web-MIDI browsers such as MIDIWeb) reach
   // the same FM-1 through CoreMIDI. Safari itself has no Web MIDI; there the page falls back to the mock.
   const WEB_MIDI_FM1 = /fm-1|felucca|sloop|clipper|ota|composite|sinco|usb-midi/i;
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent || "") ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  let webMidiHintAt = 0;
+  function webMidiHint() {
+    if (!IS_IOS || Date.now() - webMidiHintAt < 8000) return;
+    webMidiHintAt = Date.now();
+    setTimeout(() => toastMsg(T("conn.iosWebMidi")), 600);
+  }
   async function startWebMidi() {
     if (!navigator.requestMIDIAccess) throw new Error("no Web MIDI");
     const access = await navigator.requestMIDIAccess({ sysex: true });
@@ -212,7 +220,7 @@
   } else {
     const fallback = () => setTimeout(() => { if (!link) start(mockTransport(), "FM-1 (mock)"); }, 250);
     if (navigator.requestMIDIAccess) startWebMidi().catch(fallback);
-    else fallback();
+    else { fallback(); webMidiHint(); }
   }
 
   document.querySelector(".conn").addEventListener("click", () => {
@@ -224,6 +232,7 @@
       });
       return;
     }
+    if (!navigator.requestMIDIAccess) webMidiHint();
     if (!link) start(mockTransport(), "FM-1 (mock)");
   });
 
@@ -584,9 +593,11 @@
     return webDbPromise;
   }
   function webPut(entry) {
+    const row = { ...entry };
+    if (row.bytes || row.text) delete row.blob;     // Safari cannot clone a Blob into IndexedDB
     return webDb().then((d) => new Promise((res, rej) => {
       const tx = d.transaction("files", "readwrite");
-      tx.objectStore("files").put(entry);
+      tx.objectStore("files").put(row);
       tx.oncomplete = () => res();
       tx.onerror = () => rej(tx.error);
     })).catch(() => toastMsg(T("storage.fail")));
@@ -607,6 +618,11 @@
         r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
       });
       if (rows.length) {
+        // WAVs are persisted as an ArrayBuffer, not a Blob: Safari's IndexedDB refuses Blobs
+        // (the transaction aborts), so a take saved there would vanish on reload.
+        for (const row of rows) {
+          if (!row.blob && row.bytes) row.blob = new Blob([row.bytes], { type: "audio/wav" });
+        }
         webFiles = rows.sort((a, b) => (b.date || 0) - (a.date || 0));
         renderSongs();
       }
@@ -625,9 +641,9 @@
     },
     addWav: (name, bytes) => {
       const n = webUnique(name);
-      const blob = new Blob([bytes], { type: "audio/wav" });
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const entry = { name: n, size: bytes.length, date: Math.floor(Date.now() / 1000), kind: "wav",
-        managed: true, path: "Browser", blob };
+        managed: true, path: "Browser", blob: new Blob([bytes], { type: "audio/wav" }), bytes: buffer };
       webFiles.unshift(entry);
       webPut(entry);
       renderSongs();
@@ -1185,7 +1201,7 @@
       if (v) document.getElementById("app-version").textContent = "v" + v;
     } else {
       const el = document.getElementById("app-version");
-      if (el) el.textContent = "v0.9.4 web";
+      if (el) el.textContent = "v0.9.5 web";
     }
   } catch (e) { /* the browser preview has no package version */ }
   if (current) renderCurrent(current);
