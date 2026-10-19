@@ -1,5 +1,7 @@
 # Consort
 
+[**English**](README.md) · [简体中文](README.zh-CN.md)
+
 **A phone companion for the M-VAVE FM-1 running SLOOP 2.7.** It is deliberately narrow: it does the jobs that are awkward on the machine, and leaves the instrument itself alone.
 
 | Sampler | FX |
@@ -9,6 +11,10 @@
 | <img src="docs/screenshots/songs.jpg" width="330" alt="The songs page"> | <img src="docs/screenshots/settings.jpg" width="330" alt="The settings page"> |
 
 *Screenshots: the app wearing an FM-1 theme (ABLETON).*
+
+## Download
+
+[**Download the latest APK**](https://github.com/zisonzishen0415-stack/sloop-consort/releases/latest) — sideload it; Android will ask you to allow installs from the browser or file manager. The APK is signed with the project's debug key (not a Play Store build). Requires Android 6.0+ (minSdk 23) and USB host / OTG.
 
 ## Scope: only what SLOOP makes awkward
 

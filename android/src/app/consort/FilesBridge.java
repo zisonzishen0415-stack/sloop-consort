@@ -340,8 +340,8 @@ public final class FilesBridge {
     private boolean mediaNameExists(String name, String path) {
         try (Cursor c = activity.getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 new String[]{MediaStore.MediaColumns._ID},
-                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?",
-                new String[]{name, normDir(path) + "%"}, null)) {
+                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                new String[]{name, normDir(path)}, null)) {
             return c != null && c.moveToFirst();
         } catch (Exception e) {
             return true;                              // unknown: never risk an overwrite
@@ -352,8 +352,8 @@ public final class FilesBridge {
         if (Build.VERSION.SDK_INT >= 29) {
             try (Cursor c = activity.getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     new String[]{MediaStore.MediaColumns._ID},
-                    MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?",
-                    new String[]{name, normDir(path) + "%"}, null)) {
+                    MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                    new String[]{name, normDir(path)}, null)) {
                 if (c != null && c.moveToFirst())
                     return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0));
             } catch (Exception ignored) {
@@ -397,11 +397,11 @@ public final class FilesBridge {
     private static boolean mediaNameExists(ContentResolver cr, String name) {
         try (Cursor c = cr.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 new String[]{MediaStore.MediaColumns._ID},
-                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?",
-                new String[]{name, DIR + "/%"}, null)) {
+                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                new String[]{name, DIR + "/"}, null)) {
             return c != null && c.moveToFirst();
         } catch (Exception e) {
-            return false;
+            return true;                              // unknown: pick a new name, never reuse one
         }
     }
 

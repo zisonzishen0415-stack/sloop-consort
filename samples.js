@@ -883,7 +883,7 @@
     dbPut({ id: take.id, name: take.name, when: now, rate: take.rate, pcm: take.pcm,
       trim: { a: trim.a, b: trim.b }, root, loopMode,
       loopPts: { a: loopPts.a, b: loopPts.b }, fadeMs, xfadeMs, gainDb,
-      label: document.getElementById("smp-name").value }).catch(() => {});
+      label: document.getElementById("smp-name").value }).catch(() => toast(T("smp.editableFail")));
     renderTakes();
   }
   function adopt(st) {
@@ -1313,6 +1313,8 @@
     _slot: buildSlot
   };
   initWaveSvg();
+  const capEl = document.getElementById("smp-cap");
+  if (capEl) capEl.textContent = "/ " + MAX_SEC.toFixed(1) + " s";
   rootLabel();
   loopLabel();
   gainLabel();
