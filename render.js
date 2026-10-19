@@ -58,9 +58,15 @@
       if (o.id >= 32 && o.id <= 35) samples.push({ id: o.id, bytes });
     }
     if (!out.some((o) => o.id === 0)) throw new Error(T("songs.renderNoLoop"));
-    const order = data.order ? Sloop.unb64(data.order) : null;
+    let order = data.order ? Sloop.unb64(data.order) : null;
+    if (!order) {                                  // a backup keeps the order in its settings object
+      const s = out.find((o) => o.id === 1);
+      if (s && s.bytes.length >= 48 + 36 &&
+          s.bytes[0] === 0x33 && s.bytes[1] === 0x52 && s.bytes[2] === 0x45 && s.bytes[3] === 0x50)
+        order = s.bytes.slice(48, 48 + 36);        // "PER3" little-endian, arr_config_t
+    }
     if (order && order.length !== 36) throw new Error(T("songs.renderBad"));
-    return { objects: out, samples, order };
+    return { objects: out, samples, order: order ? Uint8Array.from(order) : null };
   }
 
   function build(module, obj) {
@@ -91,44 +97,56 @@
     return ex;
   }
 
-  function render(ex, seconds, onProgress) {
-    const total = Math.round(RATE * seconds);
-    const left = new Float32Array(total), right = new Float32Array(total);
-    let pos = 0;
-    const block = () => {
-      const n = Math.min(128, total - pos);
+  async function render(ex, seconds, onProgress, fullSong) {
+    let songMode = false;
+    if (fullSong && typeof ex.web_song_play === "function") songMode = !!ex.web_song_play();
+    const maxFrames = Math.round(RATE * (songMode ? 300 : seconds));
+    const chunks = [];
+    let frames = 0;
+    const clamp = (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    const block = (n) => {
       ex.web_render(n);
-      left.set(new Float32Array(ex.memory.buffer, ex.web_out_l(), n), pos);
-      right.set(new Float32Array(ex.memory.buffer, ex.web_out_r(), n), pos);
-      pos += n;
+      const l = new Float32Array(ex.memory.buffer, ex.web_out_l(), n);
+      const r = new Float32Array(ex.memory.buffer, ex.web_out_r(), n);
+      const b = new Uint8Array(n * 4), dv = new DataView(b.buffer);
+      for (let i = 0; i < n; i++) {
+        dv.setInt16(i * 4, clamp(l[i]), true);
+        dv.setInt16(i * 4 + 2, clamp(r[i]), true);
+      }
+      chunks.push(b);
+      frames += n;
     };
-    ex.web_buttons(PLAY_BUTTON);
-    const held = Math.min(total, Math.round(RATE * 0.05));
-    while (pos < held) block();
-    ex.web_buttons(0);
-    let next = 0.1;
-    while (pos < total) {
-      block();
-      const p = pos / total;
-      if (p >= next) {
-        if (onProgress) onProgress(Math.round(p * 100));
-        next += 0.1;
+    if (!songMode) {
+      ex.web_buttons(PLAY_BUTTON);
+      const held = Math.min(maxFrames, Math.round(RATE * 0.05));
+      while (frames < held) block(Math.min(128, held - frames));
+      ex.web_buttons(0);
+    }
+    let next = 0.5;
+    while (frames < maxFrames) {
+      block(Math.min(128, maxFrames - frames));
+      if (songMode && frames > RATE * 0.2 && typeof ex.web_song_playing === "function" && !ex.web_song_playing()) break;
+      if (frames / RATE >= next) {
+        if (onProgress) onProgress(Math.min(99, Math.round(frames / maxFrames * 100)));
+        next += 0.5;
+        await new Promise((r) => setTimeout(r, 0));    // keep the page responsive on long songs
       }
     }
     if (onProgress) onProgress(100);
-    return { left, right };
+    return { chunks, frames };
   }
 
-  function wav(left, right) {
-    const n = left.length, ab = new ArrayBuffer(44 + n * 4), v = new DataView(ab);
+  function wav(chunks, frames) {
+    const n = frames, ab = new ArrayBuffer(44 + n * 4), v = new DataView(ab);
     const str = (o, s) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, s.charCodeAt(i)); };
     str(0, "RIFF"); v.setUint32(4, 36 + n * 4, true); str(8, "WAVE");
     str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
     v.setUint32(24, RATE, true); v.setUint32(28, RATE * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
     str(36, "data"); v.setUint32(40, n * 4, true);
-    for (let i = 0; i < n; i++) {
-      v.setInt16(44 + i * 4, Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767))), true);
-      v.setInt16(46 + i * 4, Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767))), true);
+    let off = 44;
+    for (const c of chunks) {
+      new Uint8Array(ab, off, c.length).set(c);
+      off += c.length;
     }
     return new Uint8Array(ab);
   }
@@ -136,9 +154,11 @@
   async function renderData(data, seconds, onProgress, module) {
     const m = module || await wasmModule();
     const obj = objectsOf(data);
+    const fullSong = !!(obj.order && obj.order[0] > 0);
+    if (fullSong) obj.order[1] = 0;                 // render the song once, not forever
     const ex = build(m, obj);
-    const pcm = render(ex, Math.max(0.5, Math.min(300, +seconds || 16)), onProgress);
-    return wav(pcm.left, pcm.right);
+    const pcm = await render(ex, Math.max(0.5, Math.min(300, +seconds || 16)), onProgress, fullSong);
+    return wav(pcm.chunks, pcm.frames);
   }
 
   async function renderFile(f) {
@@ -150,9 +170,17 @@
     let data;
     try { data = JSON.parse(text); }
     catch (e) { toast(T("songs.renderBad")); return; }
-    const sec = prompt(T("songs.renderAsk", { name: f.name }), "16");
-    if (sec == null) return;
-    const seconds = Math.max(0.5, Math.min(300, Number(sec) || 16));
+    let fullSong = false;
+    try {
+      const o = objectsOf(data);
+      fullSong = !!(o.order && o.order[0] > 0);
+    } catch (e) { toast(e && e.message ? e.message : T("songs.renderBad")); return; }
+    let seconds = 16;
+    if (!fullSong) {
+      const sec = prompt(T("songs.renderAsk", { name: f.name }), "16");
+      if (sec == null) return;
+      seconds = Math.max(0.5, Math.min(300, Number(sec) || 16));
+    }
     try {
       toast(T("songs.rendering", { pct: 0 }));
       const bytes = await renderData(data, seconds, (pct) => toast(T("songs.rendering", { pct })));
