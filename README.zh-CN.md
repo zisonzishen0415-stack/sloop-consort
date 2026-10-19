@@ -78,7 +78,7 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 
 ## 状态
 
-已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理。Web/iOS 模式在 Chromium 和 WebKit（Safari 引擎）里用 Web MIDI 端口和 IndexedDB 文件库验证过：连接/INFO、采样保存、USR 上传、重载后 WAV 仍在、整曲渲染。还缺 iPhone + FM-1 的真机验证；Safari 本身连接 FM-1 需要 Web MIDI 浏览器。尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
+已在真机 FM-1 上端到端验证：INFO、采样编码/上传到 USR 和擦除、FX 按下/松开、全局 SET、主题读取/保存/写回和皮肤、备份到 `Download/SLOOP` 并恢复（含采样），以及通过手机库保存/载入 `.sloopsong`。循环点、三种循环状态、`smpl` 往返、多 zone header 和 TRACK/KIT 分配也在脚本化的 SLOOP 2.7 设备上检查过；zone 和 engine 编号从 `DESC`/`INFO` 解析，不是硬编码。离线渲染器在 app 页面用两段式 song 验证过：5.33 秒 44.1 kHz 立体声 WAV、106 ms，渲染出的文件也能从 WAV 筛选里管理。Web/iOS 模式在 Chromium 和 WebKit（Safari 引擎）里用 Web MIDI 端口和 IndexedDB 文件库验证过：连接/INFO、采样保存、USR 上传、重载后 WAV 仍在、整曲渲染。iPhone + FM-1 真机用 MIDIWeb Browser 跑了 `/selftest.html`，全部通过：Web MIDI/SysEx、SLOOP 2.7 INFO 握手、麦克风录音与解码、IndexedDB、`sloop.wasm`、Web Share 和下载。Safari 本身连接 FM-1 仍需 Web MIDI 浏览器。尚未在 Android 真机上做 smoke test。欢迎反馈 bug。
 
 ## 致谢与许可
 

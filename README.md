@@ -91,9 +91,10 @@ hardcoded. The offline renderer was verified in the app page with a two-section 
 44.1 kHz stereo WAV in 106 ms, and the rendered file then managed from the WAV filter. The web/iOS
 mode was checked in Chromium and in WebKit (Safari's engine) with a Web MIDI port and an IndexedDB
 library: connect/INFO, sampler save, USR upload, WAV persistence across a reload, and full-song
-render. A physical iPhone + FM-1 pass is the remaining hardware check; Safari itself needs a Web
-MIDI browser for the FM-1 link. It has not yet
-had a physical Android-device smoke test. Bug reports are welcome.
+render. A physical iPhone + FM-1 pass with MIDIWeb Browser then passed the `/selftest.html`
+diagnostic in full: Web MIDI/SysEx, the SLOOP 2.7 INFO handshake, microphone recording and decoding,
+IndexedDB, `sloop.wasm`, Web Share and download. Safari itself still needs a Web MIDI browser for the
+FM-1 link. It has not yet had a physical Android-device smoke test. Bug reports are welcome.
 
 ## Credits and licences
 
