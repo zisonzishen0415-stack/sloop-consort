@@ -10,7 +10,7 @@
 | **歌曲与工程文件** | **设置、皮肤与语言** |
 | <img src="docs/screenshots/songs.jpg" width="330" alt="歌曲页面"> | <img src="docs/screenshots/settings.jpg" width="330" alt="设置页面"> |
 
-*截图：应用套用 FM-1 主题（ABLETON）。*
+*截图：手机比例下的在线版，套用 ABLETON 主题。*
 
 ## 下载
 

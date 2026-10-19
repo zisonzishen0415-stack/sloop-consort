@@ -10,7 +10,7 @@
 | **Songs and project files** | **Settings, skins and languages** |
 | <img src="docs/screenshots/songs.jpg" width="330" alt="The songs page"> | <img src="docs/screenshots/settings.jpg" width="330" alt="The settings page"> |
 
-*Screenshots: the app wearing an FM-1 theme (ABLETON).*
+*Screenshots: the live web app at phone size, wearing an ABLETON theme.*
 
 ## Download
 
