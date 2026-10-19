@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0b">
+<title>Consort — iOS browser test</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px; background: #0b0b0b; color: #e8e8e8;
+    font: 14px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+  h1 { font-size: 17px; margin: 0 0 4px; letter-spacing: .02em; }
+  p { margin: 0 0 14px; color: #9a9a9a; }
+  button { appearance: none; border: 1px solid #555; background: #1a1a1a; color: #eee;
+    border-radius: 4px; padding: 9px 12px; font: inherit; margin: 0 6px 10px 0; }
+  button.pri { border-color: #287CFF; background: #123a72; }
+  button:disabled { opacity: .45; }
+  #log { white-space: pre-wrap; word-break: break-word; background: #111; border: 1px solid #262626;
+    border-radius: 4px; padding: 10px; min-height: 180px; margin: 4px 0 12px; }
+  .ok { color: #7ee787; } .bad { color: #ff7b72; } .dim { color: #8b949e; }
+  a { color: #79b8ff; }
+  #report { width: 100%; height: 180px; background: #111; color: #ddd; border: 1px solid #262626;
+    border-radius: 4px; padding: 10px; font: 12px/1.4 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>Consort — iOS browser test</h1>
+<p>Open this page in the browser you will use with the FM-1. It only reads INFO; it does not write samples or songs. <a href="./">Back to Consort</a></p>
+<button class="pri" id="run">Run test</button>
+<button id="share" disabled>Test share</button>
+<button id="download" disabled>Test download</button>
+<button id="copy" disabled>Copy report</button>
+<pre id="log">Press “Run test”. Allow MIDI/SysEx and microphone access when asked.</pre>
+<textarea id="report" readonly hidden></textarea>
+<script src="protocol.js?v=0.9.5"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const lines = [];
+  const report = { date: new Date().toISOString(), checks: {} };
+  const FM1 = /fm-1|felucca|sloop|clipper|ota|composite|sinco|usb-midi/i;
+  const log = (name, ok, detail) => {
+    const cls = ok === null ? "dim" : ok ? "ok" : "bad";
+    const mark = ok === null ? "•" : ok ? "✓" : "✗";
+    lines.push(mark + " " + name + (detail ? " — " + detail : ""));
+    report.checks[name] = { ok, detail: detail || "" };
+    $("log").innerHTML = lines.map((line) => {
+      const c = line.slice(0, 1) === "✓" ? "ok" : line.slice(0, 1) === "✗" ? "bad" : "dim";
+      return '<span class="' + c + '">' + line.replace(/[&<>]/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[x])) + "</span>";
+    }).join("\n");
+  };
+  const err = (name, e) => log(name, false, (e && (e.name ? e.name + ": " : "") + (e.message || e)) || String(e));
+
+  async function midiTest() {
+    if (!navigator.requestMIDIAccess) { log("Web MIDI API", false, "not available in this browser"); return; }
+    log("Web MIDI API", true);
+    try {
+      const access = await navigator.requestMIDIAccess({ sysex: true });
+      log("SysEx access", !!access.sysexEnabled, access.sysexEnabled ? "granted" : "denied");
+      const inputs = [...access.inputs.values()], outputs = [...access.outputs.values()];
+      report.ports = { inputs: inputs.map((p) => p.name), outputs: outputs.map((p) => p.name) };
+      const input = inputs.find((p) => FM1.test(p.name || ""));
+      const output = outputs.find((p) => FM1.test(p.name || ""));
+      log("FM-1 MIDI ports", !!(input && output), input && output ? input.name + " / " + output.name : "not found");
+      if (!input || !output) return;
+      const transport = {
+        send(bytes) { output.send(bytes); },
+        receive() {}
+      };
+      input.onmidimessage = (e) => { if (transport.link && e.data) transport.link.receive(Array.from(e.data)); };
+      const link = await Sloop.connect(transport);
+      report.info = link.info;
+      log("INFO handshake", true, link.info.version + " · protocol " + link.info.protocol);
+    } catch (e) { err("Web MIDI", e); }
+  }
+
+  async function micTest() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      log("Microphone API", false, "getUserMedia not available");
+      return;
+    }
+    log("Microphone API", true);
+    if (typeof MediaRecorder === "undefined") { log("MediaRecorder", false, "not available"); return; }
+    log("MediaRecorder", true);
+    let stream = null, ac = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: {
+        channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false
+      } });
+      const label = stream.getAudioTracks().map((t) => t.label).filter(Boolean).join(", ");
+      log("Microphone permission", true, label || "stream open");
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise((resolve) => { rec.onstop = resolve; });
+      rec.start();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      rec.stop();
+      await stopped;
+      const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+      report.recording = { mime: rec.mimeType || "", bytes: blob.size };
+      log("Record 1 s", blob.size > 0, (rec.mimeType || "default") + " · " + blob.size + " B");
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = await ac.decodeAudioData(await blob.arrayBuffer());
+      report.recording.seconds = buf.duration;
+      log("Decode recording", buf.duration > 0, buf.duration.toFixed(2) + " s · " + buf.sampleRate + " Hz");
+    } catch (e) { err("Microphone", e); }
+    finally {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (ac) { try { ac.close(); } catch (e) { /* gone */ } }
+    }
+  }
+
+  function idbTest() {
+    return new Promise((resolve) => {
+      if (!window.indexedDB) { log("IndexedDB", false, "not available"); resolve(); return; }
+      const open = indexedDB.open("consort-selftest", 1);
+      open.onupgradeneeded = () => {
+        if (!open.result.objectStoreNames.contains("s")) open.result.createObjectStore("s", { keyPath: "k" });
+      };
+      open.onerror = (e) => { err("IndexedDB", open.error); resolve(); };
+      open.onsuccess = () => {
+        const db = open.result;
+        const put = (v) => new Promise((res, rej) => {
+          const tx = db.transaction("s", "readwrite");
+          tx.objectStore("s").put(v);
+          tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error("abort"));
+        });
+        const test = async (name, value) => {
+          try { await put(value); log("IndexedDB " + name, true); }
+          catch (e) { log("IndexedDB " + name, false, e && e.message ? e.message : String(e)); }
+        };
+        (async () => {
+          await test("text", { k: "text", v: "ok" });
+          await test("ArrayBuffer", { k: "array", v: new Uint8Array([1, 2, 3, 4]).buffer });
+          await test("Blob", { k: "blob", v: new Blob([new Uint8Array([5, 6, 7])], { type: "audio/wav" }) });
+          resolve();
+        })();
+      };
+    });
+  }
+
+  async function wasmTest() {
+    if (typeof WebAssembly === "undefined") { log("WebAssembly", false); return; }
+    try {
+      const r = await fetch("sloop.wasm?v=0.9.5");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const bytes = await r.arrayBuffer();
+      const mod = await WebAssembly.compile(bytes);
+      const inst = await WebAssembly.instantiate(mod, {});
+      if (inst.exports._initialize) inst.exports._initialize();
+      const size = inst.exports.web_nor_size ? inst.exports.web_nor_size() : 0;
+      log("sloop.wasm", true, bytes.byteLength + " B · NOR " + size + " B");
+    } catch (e) { err("sloop.wasm", e); }
+  }
+
+  function shareDownloadTest() {
+    const file = new File([new Uint8Array([82, 73, 70, 70])], "consort-test.wav", { type: "audio/wav" });
+    report.share = { api: !!navigator.share, canShare: false };
+    try { report.share.canShare = !!(navigator.canShare && navigator.canShare({ files: [file] })); } catch (e) { /* no */ }
+    log("Web Share API", !!navigator.share, report.share.canShare ? "files shareable" : "files not shareable");
+    log("Download attribute", "download" in document.createElement("a"));
+    $("share").disabled = !navigator.share;
+    $("download").disabled = false;
+  }
+
+  function reportText() {
+    report.summary = Object.entries(report.checks).reduce((a, [, v]) => {
+      if (v.ok === true) a.pass++; else if (v.ok === false) a.fail++; else a.info++;
+      return a;
+    }, { pass: 0, fail: 0, info: 0 });
+    return JSON.stringify(report, null, 2);
+  }
+
+  $("run").addEventListener("click", async () => {
+    lines.length = 0;
+    $("log").textContent = "Running…";
+    $("run").disabled = true;
+    report.ua = navigator.userAgent;
+    report.secureContext = !!window.isSecureContext;
+    report.origin = location.origin;
+    log("Secure context", report.secureContext, location.origin);
+    await midiTest();
+    await micTest();
+    await idbTest();
+    await wasmTest();
+    shareDownloadTest();
+    const text = reportText();
+    $("report").value = text;
+    $("copy").disabled = false;
+    $("run").disabled = false;
+    log("Done", null, report.summary.pass + " passed, " + report.summary.fail + " failed");
+  });
+
+  $("share").addEventListener("click", async () => {
+    try {
+      const file = new File([new Uint8Array([82, 73, 70, 70])], "consort-test.wav", { type: "audio/wav" });
+      await navigator.share({ files: [file], title: "Consort test" });
+      log("Share sheet", true, "completed");
+    } catch (e) { err("Share sheet", e); }
+  });
+
+  $("download").addEventListener("click", () => {
+    try {
+      const blob = new Blob([new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0])], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob), a = document.createElement("a");
+      a.href = url; a.download = "consort-test.wav";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      log("Download started", true, "check Files/Downloads");
+    } catch (e) { err("Download", e); }
+  });
+
+  $("copy").addEventListener("click", async () => {
+    const text = $("report").value || reportText();
+    try {
+      await navigator.clipboard.writeText(text);
+      log("Copy report", true, "copied to clipboard");
+    } catch (e) {
+      $("report").hidden = false;
+      $("report").select();
+      log("Copy report", false, "select the report box and copy it");
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -54,7 +54,7 @@ Without the native bridge the page connects to a mock FM-1, so the whole UI and 
 
 The same page is a PWA, live at **https://zisonzishen0415-stack.github.io/sloop-consort/**. In Safari/iOS the offline renderer, the browser file library (IndexedDB), WAV share/download and local sampler editing work; the FM-1 itself, and with it themes, FX, songs and sample upload, needs the Web MIDI API, which Safari does not provide. On iOS open the page in [MIDIWeb Browser](https://apps.apple.com/app/id6757226617) (free; bridges CoreMIDI, including SysEx) or Midi浏览器; USB-C iPhones/iPads need a USB host connection. The browser is the iOS client — no native app is planned.
 
-**iPhone / iPad quick test:** install MIDIWeb Browser, connect the FM-1 through USB-C (or a Camera Adapter), open the live URL inside MIDIWeb, and tap the connection button. Allow MIDI/SysEx when asked; the banner should show `Hügelton Instruments Felucca`. Offline render and the WAV library also work in Safari without Web MIDI.
+**iPhone / iPad quick test:** install MIDIWeb Browser, connect the FM-1 through USB-C (or a Camera Adapter), open the live URL inside MIDIWeb, and tap the connection button. Allow MIDI/SysEx when asked; the banner should show `Hügelton Instruments Felucca`. Offline render and the WAV library also work in Safari without Web MIDI. A diagnostic page at [`/selftest.html`](https://zisonzishen0415-stack.github.io/sloop-consort/selftest.html) checks Web MIDI/SysEx, the INFO handshake, microphone recording, IndexedDB, `sloop.wasm`, share and download; it only reads INFO.
 
 ## Protocol
 

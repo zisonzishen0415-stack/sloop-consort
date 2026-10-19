@@ -54,7 +54,7 @@ FM-1 仍然是乐器。Consort 是额外的一双手：
 
 同一个页面也是 PWA，在线地址：**https://zisonzishen0415-stack.github.io/sloop-consort/**。在 Safari/iOS 上，离线渲染、浏览器文件库（IndexedDB）、WAV 分享/下载和本地采样编辑都能用；连接 FM-1（以及主题、FX、歌曲和采样上传）需要 Web MIDI API，而 Safari 不提供。iOS 上请用 [MIDIWeb Browser](https://apps.apple.com/app/id6757226617)（免费，把 CoreMIDI 包括 SysEx 桥接给网页）或 Midi浏览器 打开页面；USB-C iPhone/iPad 需要 USB host 连接。iOS 客户端就是浏览器，不做原生 app。
 
-**iPhone / iPad 快速验证：** 安装 MIDIWeb Browser，用 USB-C 线（或 Camera Adapter）连接 FM-1，在 MIDIWeb 里打开在线地址，点连接按钮，允许 MIDI/SysEx；banner 应显示 `Hügelton Instruments Felucca`。离线渲染和 WAV 库在 Safari 里不需要 Web MIDI 也能用。
+**iPhone / iPad 快速验证：** 安装 MIDIWeb Browser，用 USB-C 线（或 Camera Adapter）连接 FM-1，在 MIDIWeb 里打开在线地址，点连接按钮，允许 MIDI/SysEx；banner 应显示 `Hügelton Instruments Felucca`。离线渲染和 WAV 库在 Safari 里不需要 Web MIDI 也能用。诊断页 [`/selftest.html`](https://zisonzishen0415-stack.github.io/sloop-consort/selftest.html) 会检查 Web MIDI/SysEx、INFO 握手、麦克风录音、IndexedDB、`sloop.wasm`、分享和下载；它只读取 INFO。
 
 ## 协议
 
