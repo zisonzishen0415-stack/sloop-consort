@@ -21,13 +21,13 @@ echo "platform    $PLATFORM"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/classes" "$OUT/dex" "$OUT/assets"
-cp "$here/../index.html" "$here/../theme.css" "$here/../i18n.js" "$here/../protocol.js" "$here/../app.js" "$here/../samples.js" "$here/../terminus.ttf" "$OUT/assets/"
+cp "$here/../index.html" "$here/../theme.css" "$here/../i18n.js" "$here/../protocol.js" "$here/../app.js" "$here/../samples.js" "$here/../render.js" "$here/../sloop.wasm" "$here/../terminus.ttf" "$OUT/assets/"
 
 "$BTW/aapt2" compile --dir "$HEREW/res" -o "$OUTW\\res.zip"
 # About reads this back through ConsortFiles.version(), so a test install can be identified
 "$BTW/aapt2" link -o "$OUTW\\base.apk" -I "$AJARW" \
     --manifest "$HEREW\\AndroidManifest.xml" -R "$OUTW\\res.zip" -A "$OUTW\\assets" \
-    --replace-version --version-code 1 --version-name "0.9.0-$(date +%Y%m%d-%H%M)" \
+    --replace-version --version-code 2 --version-name "0.9.1-$(date +%Y%m%d-%H%M)" \
     --auto-add-overlay --min-sdk-version 23 --target-sdk-version 36
 
 find "$here/src" -name '*.java' | while read -r f; do w "$f"; done > "$OUT/sources.txt"

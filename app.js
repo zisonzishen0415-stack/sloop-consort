@@ -701,6 +701,8 @@
     const btns = [];
     if (f.kind === "song") btns.push(sbtn(T("songs.load"), () => loadSong(f)));
     if (f.kind === "backup" || f.kind === "file") btns.push(sbtn(T("songs.restoreThis"), () => restorePhoneBackup(f)));
+    if (window.ConsortRender && ["song", "set", "backup", "file"].includes(f.kind))
+      btns.push(sbtn(T("songs.render"), () => ConsortRender.renderFile(f)));
     if (!f.managed) btns.push(sbtn(T("songs.importToLibrary"), () => importFile(f)));
     btns.push(sbtn(T("menu.share"), () => (f.kind === "song" ? shareSong(f) : shareFile(f))));
     btns.push(sbtn(T("menu.rename"), () => renameFile(f)));
