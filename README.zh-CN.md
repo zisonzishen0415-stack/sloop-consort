@@ -87,3 +87,4 @@ APK 可以针对**真实的 SLOOP 固件**运行，而无需真机，通过 `too
 - 代码为 GPL-3.0-only（见 `LICENSE`），与开发时参考的 SLOOP 编辑器源码一致。
 - Terminus 字体为 SIL OFL 1.1；见 `LICENSES/Terminus-OFL.txt`。
 - 离线渲染器内嵌编译成 WebAssembly 的 SLOOP 2.7.1 固件（`sloop.wasm`，GPL-3.0）；它由 [SLOOP 源码](https://github.com/isod89/sloop-fm1)构建，运行与 FM-1 相同的 DSP。
+- **Powered by zisonzishen** — [zisonzishen0415-stack](https://github.com/zisonzishen0415-stack)。

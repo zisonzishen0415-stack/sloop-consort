@@ -14,7 +14,7 @@
   let wasmPromise = null;
 
   function wasmModule() {
-    if (!wasmPromise) wasmPromise = fetch("sloop.wasm?v=0.9.5").then((r) => {
+    if (!wasmPromise) wasmPromise = fetch("sloop.wasm?v=0.9.6").then((r) => {
       if (!r.ok) throw new Error("sloop.wasm: HTTP " + r.status);
       return r.arrayBuffer();
     }).then((b) => WebAssembly.compile(b));

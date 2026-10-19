@@ -170,6 +170,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:6px;height
 .about b{font-size:18px;line-height:22px;font-weight:400;color:var(--fg)}
 .about span{color:var(--fg2);font-size:12px;line-height:17px}
 .about .mono{color:var(--dim);font-size:10.5px;margin-top:4px}
+.about a{color:var(--acc);text-decoration:none}
+.about a:hover{text-decoration:underline}
 
 /* A phone app on a tablet or in landscape: keep a readable column instead of stretching to the screen. */
 @media (min-width:720px){

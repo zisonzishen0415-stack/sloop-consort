@@ -1201,7 +1201,7 @@
       if (v) document.getElementById("app-version").textContent = "v" + v;
     } else {
       const el = document.getElementById("app-version");
-      if (el) el.textContent = "v0.9.5 web";
+      if (el) el.textContent = "v0.9.6 web";
     }
   } catch (e) { /* the browser preview has no package version */ }
   if (current) renderCurrent(current);

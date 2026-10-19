@@ -33,7 +33,7 @@
 <button id="copy" disabled>Copy report</button>
 <pre id="log">Press “Run test”. Allow MIDI/SysEx and microphone access when asked.</pre>
 <textarea id="report" readonly hidden></textarea>
-<script src="protocol.js?v=0.9.5"></script>
+<script src="protocol.js?v=0.9.6"></script>
 <script>
 (function () {
   "use strict";
@@ -146,7 +146,7 @@
   async function wasmTest() {
     if (typeof WebAssembly === "undefined") { log("WebAssembly", false); return; }
     try {
-      const r = await fetch("sloop.wasm?v=0.9.5");
+      const r = await fetch("sloop.wasm?v=0.9.6");
       if (!r.ok) throw new Error("HTTP " + r.status);
       const bytes = await r.arrayBuffer();
       const mod = await WebAssembly.compile(bytes);

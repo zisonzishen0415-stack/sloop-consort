@@ -103,3 +103,4 @@ FM-1 link. It has not yet had a physical Android-device smoke test. Bug reports 
 - The code is GPL-3.0-only (see `LICENSE`), matching the SLOOP editor sources it was developed against.
 - The Terminus font is SIL OFL 1.1; see `LICENSES/Terminus-OFL.txt`.
 - The offline renderer embeds the SLOOP 2.7.1 firmware compiled to WebAssembly (`sloop.wasm`), GPL-3.0; it is built from the [SLOOP sources](https://github.com/isod89/sloop-fm1) and runs the same DSP as the FM-1.
+- **Powered by zisonzishen** — [zisonzishen0415-stack](https://github.com/zisonzishen0415-stack).
